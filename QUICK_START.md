@@ -9,7 +9,7 @@ A modern GUI installer for Tale of Two Wastelands 3.4, built with .NET and Avalo
 **Location:** `TtwInstallerGui/publish/`
 
 **Files needed to distribute (3 files, ~69MB):**
-- `TtwInstallerGui` - Main executable
+- `ttw_linux_gui` - Main executable
 - `libbsa_capi.so` - BSA library
 - `xdelta3` - Patch utility
 
@@ -17,7 +17,7 @@ A modern GUI installer for Tale of Two Wastelands 3.4, built with .NET and Avalo
 
 ```bash
 cd "TtwInstallerGui/publish"
-./TtwInstallerGui
+./ttw_linux_gui
 ```
 
 ## User Requirements
@@ -41,7 +41,7 @@ The installer will check on startup and show if anything is missing:
 ```bash
 cd "TtwInstallerGui"
 dotnet publish -c Release -r linux-x64
-cp bin/Release/net9.0/linux-x64/publish/{TtwInstallerGui,libbsa_capi.so,xdelta3} publish/
+cp bin/Release/net9.0/linux-x64/publish/{ttw_linux_gui,libbsa_capi.so,xdelta3} publish/
 ```
 
 ## Recent Session Changes (Nov 7, 2024)

@@ -65,7 +65,7 @@ TTW Installer/
 │   ├── App.axaml.cs                 # App initialization + temp cleanup
 │   ├── xdelta3                      # Bundled xdelta3 binary (163KB)
 │   └── publish/                     # Distribution files
-│       ├── TtwInstallerGui          # Main executable (68MB)
+│       ├── ttw_linux_gui            # Main executable (68MB)
 │       ├── libbsa_capi.so           # BSA library (486KB)
 │       ├── xdelta3                  # Bundled binary (163KB)
 │       └── README.md                # User documentation
@@ -77,7 +77,7 @@ TTW Installer/
 The final distributable is in `TtwInstallerGui/publish/`:
 
 **Essential Files (3 files, ~69MB total):**
-- `TtwInstallerGui` - Main executable (single-file, self-contained)
+- `ttw_linux_gui` - Main executable (single-file, self-contained)
 - `libbsa_capi.so` - Native BSA library
 - `xdelta3` - Bundled patch binary
 
@@ -129,7 +129,7 @@ dotnet publish -c Release -r linux-x64
 ### Copy to Distribution Folder
 ```bash
 cd "TtwInstallerGui"
-cp bin/Release/net9.0/linux-x64/publish/TtwInstallerGui publish/
+cp bin/Release/net9.0/linux-x64/publish/ttw_linux_gui publish/
 cp bin/Release/net9.0/linux-x64/publish/libbsa_capi.so publish/
 cp bin/Release/net9.0/linux-x64/publish/xdelta3 publish/
 ```
@@ -139,7 +139,7 @@ cp bin/Release/net9.0/linux-x64/publish/xdelta3 publish/
 ### GUI
 ```bash
 cd "TtwInstallerGui/publish"
-./TtwInstallerGui
+./ttw_linux_gui
 ```
 
 ### CLI
