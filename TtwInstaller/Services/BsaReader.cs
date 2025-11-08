@@ -6,32 +6,58 @@ namespace TtwInstaller.Services;
 
 /// <summary>
 /// Reads files from BSA archives using native bsa library
-/// Opens BSA, extracts file, and immediately closes - no caching
+/// Caches BSA handles for improved performance
 /// </summary>
 public class BsaReader : IDisposable
 {
     private bool _disposed;
+    private readonly Dictionary<string, IntPtr> _cachedHandles = new();
+    private readonly object _cacheLock = new();
 
     /// <summary>
-    /// Extract a file from a BSA archive (opens, extracts, and closes immediately)
+    /// Get or open a cached BSA handle (thread-safe)
     /// </summary>
-    public byte[]? ExtractFile(string bsaPath, string filePath)
+    private IntPtr GetCachedHandle(string bsaPath)
     {
-        IntPtr handle = IntPtr.Zero;
-        try
+        // Normalize path for cache key
+        var normalizedPath = Path.GetFullPath(bsaPath);
+
+        // Thread-safe cache access
+        lock (_cacheLock)
         {
+            // Check cache first
+            if (_cachedHandles.TryGetValue(normalizedPath, out var cachedHandle))
+            {
+                return cachedHandle;
+            }
+
+            // Open new BSA and cache it
             if (!File.Exists(bsaPath))
             {
                 throw new FileNotFoundException($"BSA file not found: {bsaPath}");
             }
 
-            // Open BSA temporarily
-            handle = BsaInterop.bsa_open_archive(bsaPath);
+            var handle = BsaInterop.bsa_open_archive(bsaPath);
             if (handle == IntPtr.Zero)
             {
                 var error = BsaInterop.bsa_get_last_error();
                 throw new InvalidOperationException($"Failed to open BSA: {error}");
             }
+
+            _cachedHandles[normalizedPath] = handle;
+            return handle;
+        }
+    }
+
+    /// <summary>
+    /// Extract a file from a BSA archive (uses cached handles for performance)
+    /// </summary>
+    public byte[]? ExtractFile(string bsaPath, string filePath)
+    {
+        try
+        {
+            // Get cached handle (or open and cache if not already open)
+            IntPtr handle = GetCachedHandle(bsaPath);
 
             // Extract file
             int result = BsaInterop.bsa_extract_file(
@@ -87,31 +113,19 @@ public class BsaReader : IDisposable
             Console.WriteLine($"    Error extracting from BSA: {ex.Message}");
             return null;
         }
-        finally
-        {
-            // Always close the BSA immediately after extracting
-            if (handle != IntPtr.Zero)
-            {
-                BsaInterop.bsa_close_archive(handle);
-            }
-        }
     }
 
     /// <summary>
-    /// Check if a file exists in a BSA archive
+    /// Check if a file exists in a BSA archive (uses cached handle)
     /// </summary>
     public bool FileExists(string bsaPath, string filePath)
     {
-        IntPtr handle = IntPtr.Zero;
         try
         {
             if (!File.Exists(bsaPath))
                 return false;
 
-            handle = BsaInterop.bsa_open_archive(bsaPath);
-            if (handle == IntPtr.Zero)
-                return false;
-
+            IntPtr handle = GetCachedHandle(bsaPath);
             int result = BsaInterop.bsa_file_exists(handle, filePath);
             return result == 1;
         }
@@ -119,34 +133,24 @@ public class BsaReader : IDisposable
         {
             return false;
         }
-        finally
-        {
-            if (handle != IntPtr.Zero)
-                BsaInterop.bsa_close_archive(handle);
-        }
     }
 
     /// <summary>
-    /// Get file count in archive
+    /// Get file count in archive (uses cached handle)
     /// </summary>
     public int GetFileCount(string bsaPath)
     {
-        IntPtr handle = IntPtr.Zero;
         try
         {
             if (!File.Exists(bsaPath))
                 return -1;
 
-            handle = BsaInterop.bsa_open_archive(bsaPath);
-            if (handle == IntPtr.Zero)
-                return -1;
-
+            IntPtr handle = GetCachedHandle(bsaPath);
             return BsaInterop.bsa_get_file_count(handle);
         }
-        finally
+        catch
         {
-            if (handle != IntPtr.Zero)
-                BsaInterop.bsa_close_archive(handle);
+            return -1;
         }
     }
 
@@ -154,8 +158,20 @@ public class BsaReader : IDisposable
     {
         if (!_disposed)
         {
-            // No cached handles to clean up since we open/close immediately
-            _disposed = true;
+            lock (_cacheLock)
+            {
+                // Close all cached BSA handles
+                foreach (var handle in _cachedHandles.Values)
+                {
+                    if (handle != IntPtr.Zero)
+                    {
+                        BsaInterop.bsa_close_archive(handle);
+                    }
+                }
+                _cachedHandles.Clear();
+
+                _disposed = true;
+            }
         }
         GC.SuppressFinalize(this);
     }

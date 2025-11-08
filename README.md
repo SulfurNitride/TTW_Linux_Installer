@@ -6,6 +6,12 @@ To run it all you need to do is either double click it and allow executing. Or `
 
 Not sure how much I'm going to update this I just wanted to share it.
 
-Where to get the MPI file? https://mod.pub/ttw/133/files need to make an account, and and download the latest Tale of Two Wastelands file. Extract it and the mpi file will be inside.
+Where to get the MPI file?
+
+TTW: https://mod.pub/ttw/133/files need to make an account, and and download the latest Tale of Two Wastelands file. Extract it and the mpi file will be inside.
+
+FNV BSA DECOMPRESSOR: https://www.nexusmods.com/newvegas/mods/65854
+
+OBLIVION BSA DECOMPRESSOR: https://www.nexusmods.com/oblivion/mods/49652
 
 Requirements: FFMPEG I literally think this is the only thing you need.

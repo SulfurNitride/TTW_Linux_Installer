@@ -20,10 +20,34 @@ public class InstallConfig
     /// </summary>
     public string FalloutNVRoot { get; set; } = string.Empty;
 
+    private string? _falloutNVDataOverride;
+
     /// <summary>
     /// Fallout New Vegas Data directory
+    /// Can be overridden for special cases like BSA decompression
     /// </summary>
-    public string FalloutNVData => Path.Combine(FalloutNVRoot, "Data");
+    public string FalloutNVData
+    {
+        get => _falloutNVDataOverride ?? Path.Combine(FalloutNVRoot, "Data");
+        set => _falloutNVDataOverride = value;
+    }
+
+    /// <summary>
+    /// Oblivion root directory (TES4)
+    /// </summary>
+    public string OblivionRoot { get; set; } = string.Empty;
+
+    private string? _oblivionDataOverride;
+
+    /// <summary>
+    /// Oblivion Data directory (TES4DATA)
+    /// Can be overridden for special cases like BSA decompression
+    /// </summary>
+    public string OblivionData
+    {
+        get => _oblivionDataOverride ?? Path.Combine(OblivionRoot, "Data");
+        set => _oblivionDataOverride = value;
+    }
 
     /// <summary>
     /// Destination directory for TTW installation

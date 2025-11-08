@@ -15,6 +15,7 @@ public class BsaWriter : IDisposable
     private readonly string _destinationPath;
     private readonly string _tempBasePath;
     private bool _disposed;
+    private readonly object _writeLock = new();
 
     public BsaWriter(List<Location> locations, string destinationPath)
     {
@@ -76,7 +77,7 @@ public class BsaWriter : IDisposable
     }
 
     /// <summary>
-    /// Add a file to a BSA collection (writes to temp directory instead of memory)
+    /// Add a file to a BSA collection (writes to temp directory instead of memory, thread-safe)
     /// </summary>
     public void AddFile(int locationIndex, string filePath, byte[] data)
     {
@@ -97,22 +98,26 @@ public class BsaWriter : IDisposable
             Directory.CreateDirectory(tempFileDir);
         }
 
-        // Detect collision: check if temp file already exists
-        if (File.Exists(tempFilePath))
+        // Thread-safe file tracking and collision detection
+        lock (_writeLock)
         {
-            // This is a collision! The temp path already exists.
-            if (bsa.WrittenFiles.TryGetValue(tempFilePath, out var originalPath))
+            // Detect collision: check if temp file already exists
+            if (File.Exists(tempFilePath))
             {
-                bsa.Collisions.Add((originalPath, filePath, tempFilePath));
+                // This is a collision! The temp path already exists.
+                if (bsa.WrittenFiles.TryGetValue(tempFilePath, out var originalPath))
+                {
+                    bsa.Collisions.Add((originalPath, filePath, tempFilePath));
+                }
             }
-        }
-        else
-        {
-            // Track this file
-            bsa.WrittenFiles[tempFilePath] = filePath;
-        }
+            else
+            {
+                // Track this file
+                bsa.WrittenFiles[tempFilePath] = filePath;
+            }
 
-        File.WriteAllBytes(tempFilePath, data);
+            File.WriteAllBytes(tempFilePath, data);
+        }
 
         // Track file count (thread-safe)
         Interlocked.Increment(ref bsa.FileCount);

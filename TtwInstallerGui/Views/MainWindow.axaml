@@ -3,20 +3,33 @@
         xmlns:vm="using:TtwInstallerGui.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="750"
         x:Class="TtwInstallerGui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="TTW Installer"
-        Width="900" Height="700"
-        MinWidth="800" MinHeight="600">
+        Title="TTW Installer &amp; BSA Tools"
+        Width="900" Height="750"
+        MinWidth="800" MinHeight="650">
 
     <DockPanel Margin="20">
-        <!-- Title -->
+        <!-- Main Title -->
         <TextBlock DockPanel.Dock="Top"
-                   Text="Tale of Two Wastelands Installer"
+                   Text="TTW Installer &amp; BSA Tools"
                    FontSize="24"
                    FontWeight="Bold"
-                   Margin="0,0,0,20"/>
+                   Margin="0,0,0,15"/>
+
+        <!-- Tab Control -->
+        <TabControl DockPanel.Dock="Top" SelectedIndex="{Binding SelectedTabIndex}" IsEnabled="{Binding !IsInstalling}">
+
+            <!-- TTW Installer Tab -->
+            <TabItem Header="TTW Installer">
+                <DockPanel Margin="10">
+                    <!-- TTW Title -->
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Tale of Two Wastelands Installer"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,15"/>
 
         <!-- Configuration Section -->
         <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,20">
@@ -86,6 +99,168 @@
                          AcceptsReturn="True"/>
             </ScrollViewer>
         </Border>
+                </DockPanel>
+            </TabItem>
+
+            <!-- FNV BSA Decompressor Tab -->
+            <TabItem Header="FNV BSA Decompressor">
+                <DockPanel Margin="10">
+                    <!-- FNV BSA Decompressor Title -->
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Fallout New Vegas BSA Decompressor"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,15"/>
+
+                    <!-- Configuration Section -->
+                    <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,20">
+                        <!-- FNV Path -->
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="Fallout New Vegas:" Width="150" VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BsaBrowseFalloutNVCommand}"/>
+                            <TextBox Text="{Binding BsaFalloutNVPath}" IsReadOnly="False" Watermark="Path to Fallout New Vegas Data folder"/>
+                        </DockPanel>
+
+                        <!-- FNV MPI Package Path -->
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="FNV BSA Decompressor:" Width="150" VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BsaBrowseMpiCommand}"/>
+                            <TextBox Text="{Binding BsaMpiPath}" IsReadOnly="False" Watermark="Path to FNV BSA Decompressor .mpi file"/>
+                        </DockPanel>
+
+                        <!-- Output Path (Optional for testing) -->
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="Output (Optional):" Width="150" VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BsaBrowseOutputCommand}"/>
+                            <TextBox Text="{Binding BsaOutputPath}" IsReadOnly="False" Watermark="Leave empty to decompress in-place, or specify test directory"/>
+                        </DockPanel>
+
+                        <!-- Info Text -->
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,5,0,0">
+                            ⚠️ Note: This will decompress your Fallout New Vegas BSA archives. For testing, specify an output directory to avoid modifying your game files.
+                        </TextBlock>
+                    </StackPanel>
+
+                    <!-- Progress Section -->
+                    <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,20">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right"
+                                       Text="{Binding BsaProgressText}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                            <ProgressBar Value="{Binding BsaProgressPercent}"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Height="30"/>
+                        </DockPanel>
+
+                        <Button Content="{Binding BsaInstallButtonText}"
+                                Command="{Binding StartBsaDecompressCommand}"
+                                IsEnabled="{Binding !IsInstalling}"
+                                HorizontalAlignment="Stretch"
+                                Height="40"
+                                FontSize="16"
+                                FontWeight="Bold"/>
+                    </StackPanel>
+
+                    <!-- Log Output -->
+                    <Border BorderBrush="Gray" BorderThickness="1" DockPanel.Dock="Top">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                            <TextBox Text="{Binding BsaLogOutput}"
+                                     IsReadOnly="True"
+                                     TextWrapping="NoWrap"
+                                     FontFamily="Consolas,Courier New,monospace"
+                                     FontSize="11"
+                                     Background="#1E1E1E"
+                                     Foreground="#D4D4D4"
+                                     Padding="10"
+                                     MinHeight="300"
+                                     AcceptsReturn="True"/>
+                        </ScrollViewer>
+                    </Border>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Oblivion BSA Decompressor Tab -->
+            <TabItem Header="Oblivion BSA Decompressor">
+                <DockPanel Margin="10">
+                    <!-- Oblivion BSA Decompressor Title -->
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Oblivion BSA Decompressor"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,15"/>
+
+                    <!-- Configuration Section -->
+                    <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,20">
+                        <!-- Oblivion Path -->
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="Oblivion:" Width="150" VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding OblivionBrowseDataCommand}"/>
+                            <TextBox Text="{Binding OblivionDataPath}" IsReadOnly="False" Watermark="Path to Oblivion Data folder"/>
+                        </DockPanel>
+
+                        <!-- Oblivion MPI Package Path -->
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="Oblivion BSA Decompressor:" Width="150" VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding OblivionBrowseMpiCommand}"/>
+                            <TextBox Text="{Binding OblivionMpiPath}" IsReadOnly="False" Watermark="Path to Oblivion BSA Decompressor .mpi file"/>
+                        </DockPanel>
+
+                        <!-- Output Path (Optional for testing) -->
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="Output (Optional):" Width="150" VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding OblivionBrowseOutputCommand}"/>
+                            <TextBox Text="{Binding OblivionOutputPath}" IsReadOnly="False" Watermark="Leave empty to decompress in-place, or specify test directory"/>
+                        </DockPanel>
+
+                        <!-- Info Text -->
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,5,0,0">
+                            ⚠️ Note: This will decompress your Oblivion BSA archives. For testing, specify an output directory to avoid modifying your game files.
+                        </TextBlock>
+                    </StackPanel>
+
+                    <!-- Progress Section -->
+                    <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,20">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right"
+                                       Text="{Binding OblivionProgressText}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                            <ProgressBar Value="{Binding OblivionProgressPercent}"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Height="30"/>
+                        </DockPanel>
+
+                        <Button Content="{Binding OblivionInstallButtonText}"
+                                Command="{Binding StartOblivionDecompressCommand}"
+                                IsEnabled="{Binding !IsInstalling}"
+                                HorizontalAlignment="Stretch"
+                                Height="40"
+                                FontSize="16"
+                                FontWeight="Bold"/>
+                    </StackPanel>
+
+                    <!-- Log Output -->
+                    <Border BorderBrush="Gray" BorderThickness="1" DockPanel.Dock="Top">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                            <TextBox Text="{Binding OblivionLogOutput}"
+                                     IsReadOnly="True"
+                                     TextWrapping="NoWrap"
+                                     FontFamily="Consolas,Courier New,monospace"
+                                     FontSize="11"
+                                     Background="#1E1E1E"
+                                     Foreground="#D4D4D4"
+                                     Padding="10"
+                                     MinHeight="300"
+                                     AcceptsReturn="True"/>
+                        </ScrollViewer>
+                    </Border>
+                </DockPanel>
+            </TabItem>
+
+        </TabControl>
     </DockPanel>
 
 </Window>

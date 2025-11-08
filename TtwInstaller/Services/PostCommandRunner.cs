@@ -8,10 +8,12 @@ namespace TtwInstaller.Services;
 public class PostCommandRunner
 {
     private readonly string _destinationPath;
+    private readonly InstallConfig? _config;
 
-    public PostCommandRunner(string destinationPath)
+    public PostCommandRunner(string destinationPath, InstallConfig? config = null)
     {
         _destinationPath = destinationPath;
+        _config = config;
     }
 
     /// <summary>
@@ -62,8 +64,8 @@ public class PostCommandRunner
     /// </summary>
     private bool ExecuteCommand(string commandValue)
     {
-        // Replace %DESTINATION% variable
-        var command = commandValue.Replace("%DESTINATION%", _destinationPath);
+        // Replace all path variables
+        var command = ResolveVariables(commandValue);
 
         // Parse Windows cmd.exe commands
         if (command.Contains("cmd.exe") && command.Contains("/C"))
@@ -147,5 +149,53 @@ public class PostCommandRunner
         }
 
         return (null, null);
+    }
+
+    /// <summary>
+    /// Resolve path variables in commands
+    /// </summary>
+    private string ResolveVariables(string path)
+    {
+        var resolved = path;
+
+        // Replace %DESTINATION% first
+        resolved = resolved.Replace("%DESTINATION%", _destinationPath);
+
+        // Replace game-specific variables if config is available
+        if (_config != null)
+        {
+            if (!string.IsNullOrEmpty(_config.Fallout3Root))
+            {
+                resolved = resolved.Replace("%FO3ROOT%", _config.Fallout3Root);
+                resolved = resolved.Replace("%FO3DATA%", _config.Fallout3Data);
+            }
+            // Replace FNV variables (check Data path since it might be overridden)
+            if (!string.IsNullOrEmpty(_config.FalloutNVRoot))
+            {
+                resolved = resolved.Replace("%FNVROOT%", _config.FalloutNVRoot);
+            }
+            if (!string.IsNullOrEmpty(_config.FalloutNVData))
+            {
+                resolved = resolved.Replace("%FNVDATA%", _config.FalloutNVData);
+            }
+
+            // Replace Oblivion variables (check Data path since it might be overridden)
+            if (!string.IsNullOrEmpty(_config.OblivionRoot))
+            {
+                resolved = resolved.Replace("%TES4ROOT%", _config.OblivionRoot);
+            }
+            if (!string.IsNullOrEmpty(_config.OblivionData))
+            {
+                resolved = resolved.Replace("%TES4DATA%", _config.OblivionData);
+            }
+        }
+
+        // Convert Windows paths to Unix paths if needed
+        if (Path.DirectorySeparatorChar == '/')
+        {
+            resolved = resolved.Replace('\\', '/');
+        }
+
+        return resolved;
     }
 }

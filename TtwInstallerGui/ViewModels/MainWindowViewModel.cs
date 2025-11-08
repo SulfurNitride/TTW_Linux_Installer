@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using Avalonia;
@@ -19,6 +20,7 @@ namespace TtwInstallerGui.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
+    // TTW Installer Properties
     [ObservableProperty]
     private string _fallout3Path = "";
 
@@ -46,13 +48,65 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string _installButtonText = "Start Installation";
 
+    // BSA Decompressor Properties
+    [ObservableProperty]
+    private string _bsaFalloutNVPath = "";
+
+    [ObservableProperty]
+    private string _bsaMpiPath = "";
+
+    [ObservableProperty]
+    private string _bsaOutputPath = "";
+
+    [ObservableProperty]
+    private double _bsaProgressPercent = 0;
+
+    [ObservableProperty]
+    private string _bsaProgressText = "Ready";
+
+    [ObservableProperty]
+    private string _bsaLogOutput = "";
+
+    [ObservableProperty]
+    private string _bsaInstallButtonText = "Start Decompression";
+
+    // Oblivion BSA Decompressor Properties
+    [ObservableProperty]
+    private string _oblivionDataPath = "";
+
+    [ObservableProperty]
+    private string _oblivionMpiPath = "";
+
+    [ObservableProperty]
+    private string _oblivionOutputPath = "";
+
+    [ObservableProperty]
+    private double _oblivionProgressPercent = 0;
+
+    [ObservableProperty]
+    private string _oblivionProgressText = "Ready";
+
+    [ObservableProperty]
+    private string _oblivionLogOutput = "";
+
+    [ObservableProperty]
+    private string _oblivionInstallButtonText = "Start Decompression";
+
+    // Tab Control
+    [ObservableProperty]
+    private int _selectedTabIndex = 0;
+
     private StringBuilder _logBuilder = new StringBuilder();
+    private StringBuilder _bsaLogBuilder = new StringBuilder();
+    private StringBuilder _oblivionLogBuilder = new StringBuilder();
     private Window? _mainWindow;
 
     public void SetMainWindow(Window window)
     {
         _mainWindow = window;
         LoadConfig();
+        LoadBsaConfig();
+        LoadOblivionConfig();
         _ = ShowStartupDependencyCheckAsync();
     }
 
@@ -573,53 +627,56 @@ public partial class MainWindowViewModel : ViewModelBase
         // Create destination
         Directory.CreateDirectory(config.DestinationPath);
 
-        // Process New assets (10-20%)
+        // Process New assets (10-20%) - Parallelized
         UpdateProgress(15, $"Processing {newAssets.Count} new assets...");
-        foreach (var asset in newAssets)
+        int newProcessed = 0;
+        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 4 };
+        Parallel.ForEach(newAssets, parallelOptions, asset =>
         {
             assetProcessor.ProcessAsset(asset);
-            processedAssets++;
-            if (processedAssets % 100 == 0)
+            int current = Interlocked.Increment(ref newProcessed);
+            Interlocked.Increment(ref processedAssets);
+            if (current % 100 == 0)
             {
-                double percent = 15 + (5.0 * processedAssets / newAssets.Count);
-                UpdateProgress(percent, $"New assets: {processedAssets}/{newAssets.Count}");
+                double percent = 15 + (5.0 * current / newAssets.Count);
+                UpdateProgress(percent, $"New assets: {current}/{newAssets.Count}");
             }
-        }
+        });
 
-        // Process Copy assets (20-50%)
+        // Process Copy assets (20-50%) - Parallelized
         UpdateProgress(20, $"Processing {copyAssets.Count} copy operations...");
         int copyCount = 0;
-        foreach (var asset in copyAssets)
+        Parallel.ForEach(copyAssets, parallelOptions, asset =>
         {
             assetProcessor.ProcessAsset(asset);
-            copyCount++;
-            processedAssets++;
-            if (copyCount % 500 == 0)
+            int current = Interlocked.Increment(ref copyCount);
+            Interlocked.Increment(ref processedAssets);
+            if (current % 500 == 0)
             {
-                double percent = 20 + (30.0 * copyCount / copyAssets.Count);
-                UpdateProgress(percent, $"Copy: {copyCount}/{copyAssets.Count}");
+                double percent = 20 + (30.0 * current / copyAssets.Count);
+                UpdateProgress(percent, $"Copy: {current}/{copyAssets.Count}");
             }
-        }
+        });
 
-        // Process Patch assets (50-60%)
+        // Process Patch assets (50-60%) - Parallelized
         UpdateProgress(50, $"Processing {patchAssets.Count} patches...");
         int patchCount = 0;
-        foreach (var asset in patchAssets)
+        Parallel.ForEach(patchAssets, parallelOptions, asset =>
         {
             assetProcessor.ProcessAsset(asset);
-            patchCount++;
-            processedAssets++;
-            if (patchCount % 100 == 0)
+            int current = Interlocked.Increment(ref patchCount);
+            Interlocked.Increment(ref processedAssets);
+            if (current % 100 == 0)
             {
-                double percent = 50 + (10.0 * patchCount / patchAssets.Count);
-                UpdateProgress(percent, $"Patches: {patchCount}/{patchAssets.Count}");
+                double percent = 50 + (10.0 * current / patchAssets.Count);
+                UpdateProgress(percent, $"Patches: {current}/{patchAssets.Count}");
             }
-        }
+        });
 
         // Detect CPU cores for parallel audio processing
         var cpuCores = Environment.ProcessorCount;
-        var parallelThreads = Math.Max(1, cpuCores - 2); // Leave 2 cores for system
-        AppendLog($"\nDetected {cpuCores} CPU cores, using {parallelThreads} threads for parallel audio processing\n");
+        var parallelThreads = cpuCores; // Use ALL cores for ffmpeg - 100% CPU!
+        AppendLog($"\nDetected {cpuCores} CPU cores, using {parallelThreads} threads for parallel audio processing (100% CPU)\n");
 
         // Process OggEnc2 assets (60-75%) - PARALLEL
         UpdateProgress(60, $"Processing {oggEnc2Assets.Count} OggEnc2 operations...");
@@ -681,7 +738,7 @@ public partial class MainWindowViewModel : ViewModelBase
         UpdateProgress(95, "Running post-installation commands...");
         AppendLog("\n=== Running Post-Installation Commands ===");
 
-        var postCommandRunner = new PostCommandRunner(config.DestinationPath);
+        var postCommandRunner = new PostCommandRunner(config.DestinationPath, config);
         var postCommands = manifest.PostCommands ?? new List<PostCommand>();
         postCommandRunner.RunPostCommands(postCommands);
 
@@ -721,5 +778,667 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             LogOutput = logText;
         });
+    }
+
+    // BSA Decompressor Methods
+    private void AppendBsaLog(string message)
+    {
+        _bsaLogBuilder.AppendLine(message);
+        var logText = _bsaLogBuilder.ToString();
+        Dispatcher.UIThread.Post(() =>
+        {
+            BsaLogOutput = logText;
+        });
+    }
+
+    private void UpdateBsaProgress(double percent, string text)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            BsaProgressPercent = percent;
+            BsaProgressText = $"{percent:F1}% - {text}";
+        });
+    }
+
+    [RelayCommand]
+    private async Task BsaBrowseFalloutNV()
+    {
+        var path = await BrowseFolder("Select Fallout New Vegas Data Directory");
+        if (!string.IsNullOrEmpty(path))
+        {
+            BsaFalloutNVPath = path;
+            SaveBsaConfig();
+        }
+    }
+
+    [RelayCommand]
+    private async Task BsaBrowseMpi()
+    {
+        var path = await BrowseMpiFileOrFolder("Select FNV BSA Decompressor MPI File");
+        if (!string.IsNullOrEmpty(path))
+        {
+            BsaMpiPath = path;
+            SaveBsaConfig();
+        }
+    }
+
+    [RelayCommand]
+    private async Task BsaBrowseOutput()
+    {
+        var path = await BrowseFolder("Select Output Directory (for testing)");
+        if (!string.IsNullOrEmpty(path))
+        {
+            BsaOutputPath = path;
+            SaveBsaConfig();
+        }
+    }
+
+    private void LoadBsaConfig()
+    {
+        var configPath = "bsa-decompressor-config.json";
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(configPath);
+                var config = System.Text.Json.JsonSerializer.Deserialize<BsaDecompressorConfig>(json);
+                if (config != null)
+                {
+                    BsaFalloutNVPath = config.FalloutNVDataPath ?? "";
+                    BsaMpiPath = config.MpiPath ?? "";
+                    BsaOutputPath = config.OutputPath ?? "";
+                    AppendBsaLog("Loaded configuration from bsa-decompressor-config.json");
+                }
+            }
+            catch
+            {
+                // Ignore errors loading config
+            }
+        }
+    }
+
+    private void SaveBsaConfig()
+    {
+        var config = new BsaDecompressorConfig
+        {
+            FalloutNVDataPath = BsaFalloutNVPath,
+            MpiPath = BsaMpiPath,
+            OutputPath = BsaOutputPath
+        };
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText("bsa-decompressor-config.json", json);
+        }
+        catch
+        {
+            // Ignore save errors
+        }
+    }
+
+    [RelayCommand]
+    private async Task StartBsaDecompress()
+    {
+        if (IsInstalling) return;
+
+        // Validate paths
+        if (string.IsNullOrWhiteSpace(BsaFalloutNVPath) || string.IsNullOrWhiteSpace(BsaMpiPath))
+        {
+            AppendBsaLog("❌ Error: FNV path and MPI file must be specified!");
+            return;
+        }
+
+        IsInstalling = true;
+        BsaInstallButtonText = "Decompressing...";
+        _bsaLogBuilder.Clear();
+        BsaLogOutput = "";
+        BsaProgressPercent = 0;
+        BsaProgressText = "Starting...";
+
+        SaveBsaConfig();
+
+        try
+        {
+            await Task.Run(() => RunBsaDecompression());
+            AppendBsaLog("\n✅ BSA Decompression completed successfully!");
+            BsaProgressPercent = 100;
+            BsaProgressText = "Complete!";
+        }
+        catch (Exception ex)
+        {
+            AppendBsaLog($"\n❌ BSA Decompression failed: {ex.Message}");
+            BsaProgressText = "Failed";
+
+            // Write error log
+            try
+            {
+                var logPath = Path.Combine(Environment.CurrentDirectory, "bsa-decompressor-error.log");
+                var errorLog = $"BSA Decompressor Error Log - {DateTime.Now}\n\n" +
+                              $"Error: {ex.Message}\n\n" +
+                              $"Stack Trace:\n{ex.StackTrace}\n\n" +
+                              $"Full Log:\n{_bsaLogBuilder}";
+                File.WriteAllText(logPath, errorLog);
+                AppendBsaLog($"\n📝 Error log saved to: {logPath}");
+            }
+            catch { }
+        }
+        finally
+        {
+            IsInstalling = false;
+            BsaInstallButtonText = "Start Decompression";
+        }
+    }
+
+    private void RunBsaDecompression()
+    {
+        AppendBsaLog("=== FNV BSA Decompressor ===\n");
+        AppendBsaLog($"FNV Data Path: {BsaFalloutNVPath}");
+        AppendBsaLog($"MPI File: {BsaMpiPath}");
+
+        // Determine output directory
+        string outputPath = string.IsNullOrWhiteSpace(BsaOutputPath) ? BsaFalloutNVPath : BsaOutputPath;
+        AppendBsaLog($"Output Path: {outputPath}\n");
+
+        // Validate FNV path exists
+        if (!Directory.Exists(BsaFalloutNVPath))
+        {
+            throw new Exception($"FNV Data directory not found: {BsaFalloutNVPath}");
+        }
+
+        // Check if MPI extraction is needed
+        string? extractedMpiPath = null;
+        if (MpiExtractor.IsMpiFile(BsaMpiPath))
+        {
+            AppendBsaLog("Detected .mpi file - extracting...");
+            UpdateBsaProgress(5, "Extracting MPI package...");
+            try
+            {
+                extractedMpiPath = MpiExtractor.ExtractMpiToTemp(BsaMpiPath);
+                AppendBsaLog("✅ MPI extraction complete\n");
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"MPI extraction failed: {ex.Message}");
+            }
+        }
+        else
+        {
+            extractedMpiPath = BsaMpiPath;
+        }
+
+        try
+        {
+            RunBsaDecompressionInternal(extractedMpiPath, outputPath);
+        }
+        finally
+        {
+            // Clean up extracted MPI if we created one
+            if (MpiExtractor.IsMpiFile(BsaMpiPath) && extractedMpiPath != null)
+            {
+                MpiExtractor.CleanupTempDirectory(extractedMpiPath);
+            }
+        }
+    }
+
+    private void RunBsaDecompressionInternal(string packagePath, string outputPath)
+    {
+        UpdateBsaProgress(10, "Loading manifest...");
+        var loader = new ManifestLoader();
+        var manifestPath = Path.Combine(packagePath, "_package", "index.json");
+
+        if (!File.Exists(manifestPath))
+        {
+            throw new Exception($"Manifest not found: {manifestPath}");
+        }
+
+        var manifest = loader.LoadFromFile(manifestPath);
+
+        // Use profile 1 for decompression (has the NEW BSA locations)
+        var locations = loader.GetLocations(manifest, 1);
+        var assets = loader.ParseAssets(manifest);
+
+        AppendBsaLog($"Loaded {assets.Count} assets");
+        AppendBsaLog($"Loaded {locations.Count} locations\n");
+
+        // Create a config-like structure for BSA decompression
+        var config = new InstallConfig
+        {
+            FalloutNVRoot = BsaFalloutNVPath,
+            DestinationPath = outputPath
+        };
+
+        // Create LocationResolver with modified locations to point to our paths
+        var locationResolver = new LocationResolver(locations, config);
+
+        // Create services
+        using var bsaReader = new BsaReader();
+        using var bsaWriter = new BsaWriter(locations, outputPath);
+        var logger = new InstallationLogger();
+
+        var assetProcessor = new AssetProcessor(locationResolver, bsaReader, config, bsaWriter, logger);
+
+        // Process assets (should all be OpType 0 - Copy)
+        UpdateBsaProgress(20, $"Processing {assets.Count} assets...");
+        int processedCount = 0;
+        int totalAssets = assets.Count;
+
+        // Parallel processing with 4 threads for improved performance
+        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 4 };
+        Parallel.ForEach(assets, parallelOptions, asset =>
+        {
+            try
+            {
+                assetProcessor.ProcessAsset(asset);
+                int current = Interlocked.Increment(ref processedCount);
+
+                if (current % 1000 == 0)
+                {
+                    double percent = 20 + (60.0 * current / totalAssets);
+                    UpdateBsaProgress(percent, $"Processed: {current}/{totalAssets}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendBsaLog($"⚠️  Failed to process {asset.SourcePath}: {ex.Message}");
+            }
+        });
+
+        AppendBsaLog($"\n✅ Processed {processedCount}/{totalAssets} assets\n");
+
+        // Write BSA archives (decompressed)
+        UpdateBsaProgress(80, "Writing decompressed BSA archives...");
+        AppendBsaLog("=== Writing Decompressed BSA Archives ===");
+        int bsaFailCount = bsaWriter.WriteAllBsas();
+
+        if (bsaFailCount > 0)
+        {
+            AppendBsaLog($"⚠️  {bsaFailCount} BSA(s) failed to write");
+        }
+        else
+        {
+            AppendBsaLog("✅ All BSA archives written successfully");
+        }
+
+        // Run post-commands (file renaming/deletion)
+        UpdateBsaProgress(90, "Running post-installation commands...");
+        AppendBsaLog("\n=== Running Post-Installation Commands ===");
+
+        // IMPORTANT: Create a config for PostCommands where %FNVDATA% points to OUTPUT folder
+        // This prevents PostCommands from deleting files in the source FNV folder!
+        // Directly set FalloutNVData to outputPath (bypassing the computed property)
+        var postCommandConfig = new InstallConfig
+        {
+            FalloutNVData = outputPath,  // Directly override - files are in outputPath, not outputPath/Data
+            DestinationPath = outputPath
+        };
+
+        var postCommandRunner = new PostCommandRunner(outputPath, postCommandConfig);
+        var postCommands = manifest.PostCommands ?? new List<PostCommand>();
+        int postFailCount = postCommandRunner.RunPostCommands(postCommands);
+
+        if (postFailCount > 0)
+        {
+            AppendBsaLog($"⚠️  {postFailCount} post-command(s) failed");
+        }
+        else
+        {
+            AppendBsaLog("✅ All post-commands executed successfully");
+        }
+
+        UpdateBsaProgress(100, "Decompression complete!");
+
+        if (logger.HasIssues)
+        {
+            AppendBsaLog($"\n{logger.GetSummary()}");
+            AppendBsaLog($"⚠️  Completed with {logger.ErrorCount} error(s), {logger.WarningCount} warning(s)\n");
+        }
+        else
+        {
+            AppendBsaLog("\n✅ Decompression completed successfully with no issues!\n");
+        }
+
+        // Write log file
+        logger.WriteLogFile(outputPath);
+        AppendBsaLog($"📝 Detailed log saved to: {Path.Combine(outputPath, "ttw-installation.log")}");
+    }
+
+    // BSA Decompressor Config Model
+    private class BsaDecompressorConfig
+    {
+        public string? FalloutNVDataPath { get; set; }
+        public string? MpiPath { get; set; }
+        public string? OutputPath { get; set; }
+    }
+
+    // Oblivion BSA Decompressor Methods
+    private void AppendOblivionLog(string message)
+    {
+        _oblivionLogBuilder.AppendLine(message);
+        var logText = _oblivionLogBuilder.ToString();
+        Dispatcher.UIThread.Post(() =>
+        {
+            OblivionLogOutput = logText;
+        });
+    }
+
+    private void UpdateOblivionProgress(double percent, string text)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            OblivionProgressPercent = percent;
+            OblivionProgressText = $"{percent:F1}% - {text}";
+        });
+    }
+
+    [RelayCommand]
+    private async Task OblivionBrowseData()
+    {
+        var path = await BrowseFolder("Select Oblivion Data Directory");
+        if (!string.IsNullOrEmpty(path))
+        {
+            OblivionDataPath = path;
+            SaveOblivionConfig();
+        }
+    }
+
+    [RelayCommand]
+    private async Task OblivionBrowseMpi()
+    {
+        var path = await BrowseMpiFileOrFolder("Select Oblivion BSA Decompressor MPI File");
+        if (!string.IsNullOrEmpty(path))
+        {
+            OblivionMpiPath = path;
+            SaveOblivionConfig();
+        }
+    }
+
+    [RelayCommand]
+    private async Task OblivionBrowseOutput()
+    {
+        var path = await BrowseFolder("Select Output Directory (for testing)");
+        if (!string.IsNullOrEmpty(path))
+        {
+            OblivionOutputPath = path;
+            SaveOblivionConfig();
+        }
+    }
+
+    private void LoadOblivionConfig()
+    {
+        var configPath = "oblivion-decompressor-config.json";
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(configPath);
+                var config = System.Text.Json.JsonSerializer.Deserialize<OblivionDecompressorConfig>(json);
+                if (config != null)
+                {
+                    OblivionDataPath = config.OblivionDataPath ?? "";
+                    OblivionMpiPath = config.MpiPath ?? "";
+                    OblivionOutputPath = config.OutputPath ?? "";
+                    AppendOblivionLog("Loaded configuration from oblivion-decompressor-config.json");
+                }
+            }
+            catch
+            {
+                // Ignore errors loading config
+            }
+        }
+    }
+
+    private void SaveOblivionConfig()
+    {
+        var config = new OblivionDecompressorConfig
+        {
+            OblivionDataPath = OblivionDataPath,
+            MpiPath = OblivionMpiPath,
+            OutputPath = OblivionOutputPath
+        };
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText("oblivion-decompressor-config.json", json);
+        }
+        catch
+        {
+            // Ignore save errors
+        }
+    }
+
+    [RelayCommand]
+    private async Task StartOblivionDecompress()
+    {
+        if (IsInstalling) return;
+
+        // Validate paths
+        if (string.IsNullOrWhiteSpace(OblivionDataPath) || string.IsNullOrWhiteSpace(OblivionMpiPath))
+        {
+            AppendOblivionLog("❌ Error: Oblivion path and MPI file must be specified!");
+            return;
+        }
+
+        IsInstalling = true;
+        OblivionInstallButtonText = "Decompressing...";
+        _oblivionLogBuilder.Clear();
+        OblivionLogOutput = "";
+        OblivionProgressPercent = 0;
+        OblivionProgressText = "Starting...";
+
+        SaveOblivionConfig();
+
+        try
+        {
+            await Task.Run(() => RunOblivionDecompression());
+            AppendOblivionLog("\n✅ BSA Decompression completed successfully!");
+            OblivionProgressPercent = 100;
+            OblivionProgressText = "Complete!";
+        }
+        catch (Exception ex)
+        {
+            AppendOblivionLog($"\n❌ BSA Decompression failed: {ex.Message}");
+            OblivionProgressText = "Failed";
+
+            // Write error log
+            try
+            {
+                var logPath = Path.Combine(Environment.CurrentDirectory, "oblivion-decompressor-error.log");
+                var errorLog = $"Oblivion BSA Decompressor Error Log - {DateTime.Now}\n\n" +
+                              $"Error: {ex.Message}\n\n" +
+                              $"Stack Trace:\n{ex.StackTrace}\n\n" +
+                              $"Full Log:\n{_oblivionLogBuilder}";
+                File.WriteAllText(logPath, errorLog);
+                AppendOblivionLog($"\n📝 Error log saved to: {logPath}");
+            }
+            catch { }
+        }
+        finally
+        {
+            IsInstalling = false;
+            OblivionInstallButtonText = "Start Decompression";
+        }
+    }
+
+    private void RunOblivionDecompression()
+    {
+        AppendOblivionLog("=== Oblivion BSA Decompressor ===\n");
+        AppendOblivionLog($"Oblivion Data Path: {OblivionDataPath}");
+        AppendOblivionLog($"MPI File: {OblivionMpiPath}");
+
+        // Determine output directory
+        string outputPath = string.IsNullOrWhiteSpace(OblivionOutputPath) ? OblivionDataPath : OblivionOutputPath;
+        AppendOblivionLog($"Output Path: {outputPath}\n");
+
+        // Validate Oblivion path exists
+        if (!Directory.Exists(OblivionDataPath))
+        {
+            throw new Exception($"Oblivion Data directory not found: {OblivionDataPath}");
+        }
+
+        // Check if MPI extraction is needed
+        string? extractedMpiPath = null;
+        if (MpiExtractor.IsMpiFile(OblivionMpiPath))
+        {
+            AppendOblivionLog("Detected .mpi file - extracting...");
+            UpdateOblivionProgress(5, "Extracting MPI package...");
+            try
+            {
+                extractedMpiPath = MpiExtractor.ExtractMpiToTemp(OblivionMpiPath);
+                AppendOblivionLog("✅ MPI extraction complete\n");
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"MPI extraction failed: {ex.Message}");
+            }
+        }
+        else
+        {
+            extractedMpiPath = OblivionMpiPath;
+        }
+
+        try
+        {
+            RunOblivionDecompressionInternal(extractedMpiPath, outputPath);
+        }
+        finally
+        {
+            // Clean up extracted MPI if we created one
+            if (MpiExtractor.IsMpiFile(OblivionMpiPath) && extractedMpiPath != null)
+            {
+                MpiExtractor.CleanupTempDirectory(extractedMpiPath);
+            }
+        }
+    }
+
+    private void RunOblivionDecompressionInternal(string packagePath, string outputPath)
+    {
+        UpdateOblivionProgress(10, "Loading manifest...");
+        var loader = new ManifestLoader();
+        var manifestPath = Path.Combine(packagePath, "_package", "index.json");
+
+        if (!File.Exists(manifestPath))
+        {
+            throw new Exception($"Manifest not found: {manifestPath}");
+        }
+
+        var manifest = loader.LoadFromFile(manifestPath);
+
+        // Use profile 1 for decompression (has the NEW BSA locations)
+        var locations = loader.GetLocations(manifest, 1);
+        var assets = loader.ParseAssets(manifest);
+
+        AppendOblivionLog($"Loaded {assets.Count} assets");
+        AppendOblivionLog($"Loaded {locations.Count} locations\n");
+
+        // Create a config-like structure for BSA decompression
+        var config = new InstallConfig
+        {
+            OblivionRoot = OblivionDataPath,
+            DestinationPath = outputPath
+        };
+
+        // Create LocationResolver with modified locations to point to our paths
+        var locationResolver = new LocationResolver(locations, config);
+
+        // Create services
+        using var bsaReader = new BsaReader();
+        using var bsaWriter = new BsaWriter(locations, outputPath);
+        var logger = new InstallationLogger();
+
+        var assetProcessor = new AssetProcessor(locationResolver, bsaReader, config, bsaWriter, logger);
+
+        // Process assets (should all be OpType 0 - Copy)
+        UpdateOblivionProgress(20, $"Processing {assets.Count} assets...");
+        int processedCount = 0;
+        int totalAssets = assets.Count;
+
+        // Parallel processing with 4 threads for improved performance
+        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 4 };
+        Parallel.ForEach(assets, parallelOptions, asset =>
+        {
+            try
+            {
+                assetProcessor.ProcessAsset(asset);
+                int current = Interlocked.Increment(ref processedCount);
+
+                if (current % 1000 == 0)
+                {
+                    double percent = 20 + (60.0 * current / totalAssets);
+                    UpdateOblivionProgress(percent, $"Processed: {current}/{totalAssets}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOblivionLog($"⚠️  Failed to process {asset.SourcePath}: {ex.Message}");
+            }
+        });
+
+        AppendOblivionLog($"\n✅ Processed {processedCount}/{totalAssets} assets\n");
+
+        // Write BSA archives (decompressed)
+        UpdateOblivionProgress(80, "Writing decompressed BSA archives...");
+        AppendOblivionLog("=== Writing Decompressed BSA Archives ===");
+        int bsaFailCount = bsaWriter.WriteAllBsas();
+
+        if (bsaFailCount > 0)
+        {
+            AppendOblivionLog($"⚠️  {bsaFailCount} BSA(s) failed to write");
+        }
+        else
+        {
+            AppendOblivionLog("✅ All BSA archives written successfully");
+        }
+
+        // Run post-commands (file renaming/deletion)
+        UpdateOblivionProgress(90, "Running post-installation commands...");
+        AppendOblivionLog("\n=== Running Post-Installation Commands ===");
+
+        // IMPORTANT: Create a config for PostCommands where %TES4DATA% points to OUTPUT folder
+        // This prevents PostCommands from deleting files in the source Oblivion folder!
+        // Directly set OblivionData to outputPath (bypassing the computed property)
+        var postCommandConfig = new InstallConfig
+        {
+            OblivionData = outputPath,  // Directly override - files are in outputPath, not outputPath/Data
+            DestinationPath = outputPath
+        };
+
+        var postCommandRunner = new PostCommandRunner(outputPath, postCommandConfig);
+        var postCommands = manifest.PostCommands ?? new List<PostCommand>();
+        int postFailCount = postCommandRunner.RunPostCommands(postCommands);
+
+        if (postFailCount > 0)
+        {
+            AppendOblivionLog($"⚠️  {postFailCount} post-command(s) failed");
+        }
+        else
+        {
+            AppendOblivionLog("✅ All post-commands executed successfully");
+        }
+
+        UpdateOblivionProgress(100, "Decompression complete!");
+
+        if (logger.HasIssues)
+        {
+            AppendOblivionLog($"\n{logger.GetSummary()}");
+            AppendOblivionLog($"⚠️  Completed with {logger.ErrorCount} error(s), {logger.WarningCount} warning(s)\n");
+        }
+        else
+        {
+            AppendOblivionLog("\n✅ Decompression completed successfully with no issues!\n");
+        }
+
+        // Write log file
+        logger.WriteLogFile(outputPath);
+        AppendOblivionLog($"📝 Detailed log saved to: {Path.Combine(outputPath, "ttw-installation.log")}");
+    }
+
+    // Oblivion BSA Decompressor Config Model
+    private class OblivionDecompressorConfig
+    {
+        public string? OblivionDataPath { get; set; }
+        public string? MpiPath { get; set; }
+        public string? OutputPath { get; set; }
     }
 }

@@ -40,3 +40,4 @@ ttw-config.json
 
 # Distribution builds (too large for GitHub)
 publish/
+*-config.json

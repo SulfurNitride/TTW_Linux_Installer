@@ -74,6 +74,8 @@ public class LocationResolver
         resolved = resolved.Replace("%FO3DATA%", _config.Fallout3Data);
         resolved = resolved.Replace("%FNVROOT%", _config.FalloutNVRoot);
         resolved = resolved.Replace("%FNVDATA%", _config.FalloutNVData);
+        resolved = resolved.Replace("%TES4ROOT%", _config.OblivionRoot);
+        resolved = resolved.Replace("%TES4DATA%", _config.OblivionData);
         resolved = resolved.Replace("%DESTINATION%", _config.DestinationPath);
 
         // Convert Windows paths to Unix paths if needed
