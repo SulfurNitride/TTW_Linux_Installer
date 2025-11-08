@@ -1,0 +1,91 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TtwInstallerGui.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
+        x:Class="TtwInstallerGui.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="TTW Installer"
+        Width="900" Height="700"
+        MinWidth="800" MinHeight="600">
+
+    <DockPanel Margin="20">
+        <!-- Title -->
+        <TextBlock DockPanel.Dock="Top"
+                   Text="Tale of Two Wastelands Installer"
+                   FontSize="24"
+                   FontWeight="Bold"
+                   Margin="0,0,0,20"/>
+
+        <!-- Configuration Section -->
+        <StackPanel DockPanel.Dock="Top" Spacing="12" Margin="0,0,0,20">
+            <!-- Fallout 3 Path -->
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="Fallout 3:" Width="120" VerticalAlignment="Center"/>
+                <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BrowseFallout3Command}"/>
+                <TextBox Text="{Binding Fallout3Path}" IsReadOnly="False" Watermark="Path to Fallout 3 installation"/>
+            </DockPanel>
+
+            <!-- Fallout NV Path -->
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="Fallout New Vegas:" Width="120" VerticalAlignment="Center"/>
+                <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BrowseFalloutNVCommand}"/>
+                <TextBox Text="{Binding FalloutNVPath}" IsReadOnly="False" Watermark="Path to Fallout New Vegas installation"/>
+            </DockPanel>
+
+            <!-- MPI Package Path -->
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="TTW Package:" Width="120" VerticalAlignment="Center"/>
+                <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BrowseMpiCommand}"/>
+                <TextBox Text="{Binding MpiPath}" IsReadOnly="False" Watermark="Path to .mpi file or extracted package folder"/>
+            </DockPanel>
+
+            <!-- Output Path -->
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="Output Directory:" Width="120" VerticalAlignment="Center"/>
+                <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding BrowseOutputCommand}"/>
+                <TextBox Text="{Binding OutputPath}" IsReadOnly="False" Watermark="Where to install TTW"/>
+            </DockPanel>
+        </StackPanel>
+
+        <!-- Progress Section -->
+        <StackPanel DockPanel.Dock="Top" Spacing="10" Margin="0,0,0,20">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Right"
+                           Text="{Binding ProgressText}"
+                           VerticalAlignment="Center"
+                           Margin="10,0,0,0"/>
+                <ProgressBar Value="{Binding ProgressPercent}"
+                             Minimum="0"
+                             Maximum="100"
+                             Height="30"/>
+            </DockPanel>
+
+            <Button Content="{Binding InstallButtonText}"
+                    Command="{Binding StartInstallCommand}"
+                    IsEnabled="{Binding !IsInstalling}"
+                    HorizontalAlignment="Stretch"
+                    Height="40"
+                    FontSize="16"
+                    FontWeight="Bold"/>
+        </StackPanel>
+
+        <!-- Log Output -->
+        <Border BorderBrush="Gray" BorderThickness="1" DockPanel.Dock="Top">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                <TextBox Text="{Binding LogOutput}"
+                         IsReadOnly="True"
+                         TextWrapping="NoWrap"
+                         FontFamily="Consolas,Courier New,monospace"
+                         FontSize="11"
+                         Background="#1E1E1E"
+                         Foreground="#D4D4D4"
+                         Padding="10"
+                         MinHeight="300"
+                         AcceptsReturn="True"/>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+
+</Window>
