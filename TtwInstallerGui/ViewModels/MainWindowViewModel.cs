@@ -240,6 +240,19 @@ public partial class MainWindowViewModel : ViewModelBase
             OutputPath = config.DestinationPath ?? "";
             AppendLog("Loaded configuration from ttw-config.json");
         }
+        else
+        {
+            // Create default config file if it doesn't exist
+            var defaultConfig = new InstallConfig
+            {
+                Fallout3Root = "",
+                FalloutNVRoot = "",
+                MpiPackagePath = "",
+                DestinationPath = ""
+            };
+            defaultConfig.SaveToFile("ttw-config.json");
+            AppendLog("Created default configuration file: ttw-config.json");
+        }
     }
 
     private void SaveConfig()
@@ -259,7 +272,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var path = await BrowseFolder("Select Fallout 3 Directory");
         if (!string.IsNullOrEmpty(path))
+        {
             Fallout3Path = path;
+            SaveConfig();
+        }
     }
 
     [RelayCommand]
@@ -267,7 +283,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var path = await BrowseFolder("Select Fallout New Vegas Directory");
         if (!string.IsNullOrEmpty(path))
+        {
             FalloutNVPath = path;
+            SaveConfig();
+        }
     }
 
     [RelayCommand]
@@ -275,7 +294,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var path = await BrowseMpiFileOrFolder("Select TTW MPI File or Package Directory");
         if (!string.IsNullOrEmpty(path))
+        {
             MpiPath = path;
+            SaveConfig();
+        }
     }
 
     [RelayCommand]
@@ -283,7 +305,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var path = await BrowseFolder("Select Output Directory");
         if (!string.IsNullOrEmpty(path))
+        {
             OutputPath = path;
+            SaveConfig();
+        }
     }
 
     private async Task<string?> BrowseFolder(string title)
