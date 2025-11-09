@@ -50,12 +50,19 @@ jobs:
     - name: Package release
       run: |
         mkdir -p release
+        # Copy executables
         cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/ttw_linux_gui release/
-        cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/libbsa_capi.so release/
-        cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/xdelta3 release/
         cp TtwInstaller/bin/Release/net9.0/linux-x64/publish/TtwInstaller release/
+
+        # Copy native libraries from source (they're excluded from single-file)
+        cp TtwInstaller/libbsa_capi.so release/
+        cp TtwInstallerGui/xdelta3 release/
+
+        # Copy documentation
         cp README.md release/
         cp TtwInstaller/mpi-config.json.example release/
+
+        # Make executables executable
         chmod +x release/ttw_linux_gui
         chmod +x release/TtwInstaller
         chmod +x release/xdelta3
