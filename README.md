@@ -24,6 +24,22 @@ This installer uses parallel processing for speed - it will max out your CPU dur
 
 ## Building from Source
 
+**Easy way (recommended):**
+```bash
+./build.sh
+```
+
+This creates a `release/` folder with everything you need, plus a `universal-mpi-installer-linux-x64.tar.gz` archive ready to share.
+
+**Build script options:**
+```bash
+./build.sh --help        # Show all options
+./build.sh --gui-only    # Build only GUI
+./build.sh --cli-only    # Build only CLI
+./build.sh --clean       # Clean build artifacts
+```
+
+**Manual way:**
 ```bash
 # GUI
 dotnet publish TtwInstallerGui/TtwInstallerGui.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true
