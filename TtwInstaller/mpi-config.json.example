@@ -1,0 +1,29 @@
+{
+  "Fallout3Root": "",
+  "FalloutNVRoot": "",
+  "OblivionRoot": "",
+  "DestinationPath": "",
+  "MpiPackagePath": ""
+}
+
+// Example for TTW:
+// {
+//   "Fallout3Root": "~/.steam/steam/steamapps/common/Fallout 3 goty",
+//   "FalloutNVRoot": "~/.steam/steam/steamapps/common/Fallout New Vegas",
+//   "MpiPackagePath": "~/Downloads/TaleOfTwoWastelands-v3.3.2.mpi",
+//   "DestinationPath": "~/TTW"
+// }
+
+// Example for Oblivion BSA Decompressor:
+// {
+//   "OblivionRoot": "~/.steam/steam/steamapps/common/Oblivion",
+//   "MpiPackagePath": "~/Downloads/OblivionBSADecompressor.mpi",
+//   "DestinationPath": "~/OblivionDecompressed"
+// }
+
+// Example for FNV BSA Decompressor:
+// {
+//   "FalloutNVRoot": "~/.steam/steam/steamapps/common/Fallout New Vegas",
+//   "MpiPackagePath": "~/Downloads/FNVBSADecompressor.mpi",
+//   "DestinationPath": "~/FNVDecompressed"
+// }

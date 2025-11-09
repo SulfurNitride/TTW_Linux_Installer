@@ -34,10 +34,15 @@ artifacts/
 
 # Config files (user-specific)
 ttw-config.json
+mpi-config.json
+*-config.json
+!*-config.json.example
 
 # Temp directories
 .ttw_*/
 
 # Distribution builds (too large for GitHub)
 publish/
-*-config.json
+
+# Session notes (development only)
+SESSION_NOTES*.md

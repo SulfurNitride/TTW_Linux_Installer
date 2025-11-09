@@ -24,13 +24,14 @@ public class ValidationService
     {
         if (checks == null || checks.Count == 0)
         {
-            Console.WriteLine("No validation checks found in manifest.");
-            return true;
+            Console.WriteLine("⚠️  No validation checks found in manifest.");
+            return true; // No checks is not a failure, but should be logged
         }
 
         Console.WriteLine($"\n=== Running Pre-Flight Validation ({checks.Count} checks) ===\n");
 
-        bool allPassed = true;
+        // Defensive programming: Assume invalid until proven valid
+        bool allPassed = false;
         int passedCount = 0;
 
         foreach (var check in checks)
@@ -41,11 +42,10 @@ public class ValidationService
             {
                 passedCount++;
             }
-            else
-            {
-                allPassed = false;
-            }
         }
+
+        // Only mark as passed if ALL checks succeeded
+        allPassed = (passedCount == checks.Count);
 
         Console.WriteLine($"\n=== Validation Complete: {passedCount}/{checks.Count} checks passed ===\n");
 
@@ -128,155 +128,40 @@ public class ValidationService
     /// </summary>
     private bool RunSingleCheck(Check check)
     {
-        try
-        {
-            switch (check.Type)
-            {
-                case 0: // FileExists
-                    return CheckFileExists(check);
-
-                case 1: // FreeSize
-                    return CheckFreeSize(check);
-
-                case 2: // NoProgramFiles
-                    return CheckNoProgramFiles(check);
-
-                default:
-                    Console.WriteLine($"⚠️  Unknown check type: {check.Type}");
-                    return true; // Don't fail on unknown check types
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"⚠️  Error running check: {ex.Message}");
-            return false;
-        }
+        // Delegate to detailed version and ignore error message
+        // This eliminates code duplication - all logic is in one place
+        var (success, _) = RunSingleCheckWithDetails(check);
+        return success;
     }
 
     /// <summary>
     /// Check if a file exists and optionally verify its checksum
+    /// DEPRECATED: Use CheckFileExistsWithDetails instead
     /// </summary>
     private bool CheckFileExists(Check check)
     {
-        if (string.IsNullOrEmpty(check.File))
-        {
-            // Empty file check - just verify location exists
-            return true;
-        }
-
-        // Resolve the file path
-        string basePath = _locationResolver.GetDirectoryPath(check.Loc);
-        string filePath = Path.Combine(basePath, check.File);
-
-        bool fileExists = File.Exists(filePath);
-
-        // Apply inversion logic
-        bool checkResult = check.Inverted ? !fileExists : fileExists;
-
-        if (!checkResult)
-        {
-            Console.WriteLine($"❌ File Check Failed: {check.File}");
-            if (!string.IsNullOrEmpty(check.CustomMessage))
-            {
-                Console.WriteLine($"   {check.CustomMessage}\n");
-            }
-            return false;
-        }
-
-        // If file should exist, optionally verify checksum
-        if (!check.Inverted && fileExists && !string.IsNullOrEmpty(check.Checksums))
-        {
-            var expectedChecksums = check.Checksums
-                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => s.Trim().ToUpperInvariant())
-                .Where(s => !string.IsNullOrEmpty(s))
-                .ToList();
-
-            Console.Write($"🔍 Verifying {check.File}... ");
-
-            string actualChecksum = ChecksumHelper.CalculateSHA1(filePath);
-
-            bool checksumMatches = expectedChecksums.Any(expected =>
-                string.Equals(expected, actualChecksum, StringComparison.OrdinalIgnoreCase));
-
-            if (!checksumMatches)
-            {
-                Console.WriteLine($"❌ FAILED");
-                Console.WriteLine($"   Expected one of:");
-                foreach (var expected in expectedChecksums.Take(3))
-                {
-                    Console.WriteLine($"     {expected}");
-                }
-                if (expectedChecksums.Count > 3)
-                {
-                    Console.WriteLine($"     ... and {expectedChecksums.Count - 3} more");
-                }
-                Console.WriteLine($"   Actual: {actualChecksum}");
-
-                if (!string.IsNullOrEmpty(check.CustomMessage))
-                {
-                    Console.WriteLine($"\n   {check.CustomMessage}\n");
-                }
-
-                return false;
-            }
-
-            Console.WriteLine($"✅ OK ({actualChecksum.Substring(0, 8)}...)");
-        }
-        else if (!check.Inverted && fileExists)
-        {
-            Console.WriteLine($"✅ File exists: {check.File}");
-        }
-        else if (check.Inverted && !fileExists)
-        {
-            Console.WriteLine($"✅ File correctly absent: {check.File}");
-        }
-
-        return true;
+        var (success, _) = CheckFileExistsWithDetails(check);
+        return success;
     }
 
     /// <summary>
     /// Check if there's enough free space in the destination
+    /// DEPRECATED: Use CheckFreeSizeWithDetails instead
     /// </summary>
     private bool CheckFreeSize(Check check)
     {
-        // Disk space detection disabled - users are informed to have 20GB via startup dialog
-        Console.WriteLine($"💾 Disk space check skipped (ensure 20GB+ available)");
-        return true;
+        var (success, _) = CheckFreeSizeWithDetails(check);
+        return success;
     }
 
     /// <summary>
     /// Check if a path is NOT in Program Files
+    /// DEPRECATED: Use CheckNoProgramFilesWithDetails instead
     /// </summary>
     private bool CheckNoProgramFiles(Check check)
     {
-        string path = _locationResolver.GetDirectoryPath(check.Loc);
-
-        Console.Write($"📁 Checking installation path... ");
-
-        // Check if path contains "Program Files" or "Program Files (x86)"
-        bool isInProgramFiles = path.Contains("Program Files", StringComparison.OrdinalIgnoreCase);
-
-        if (check.Inverted)
-        {
-            isInProgramFiles = !isInProgramFiles;
-        }
-
-        if (isInProgramFiles)
-        {
-            Console.WriteLine($"❌ INVALID");
-            Console.WriteLine($"   Path: {path}");
-
-            if (!string.IsNullOrEmpty(check.CustomMessage))
-            {
-                Console.WriteLine($"\n   {check.CustomMessage}\n");
-            }
-
-            return false;
-        }
-
-        Console.WriteLine($"✅ OK");
-        return true;
+        var (success, _) = CheckNoProgramFilesWithDetails(check);
+        return success;
     }
 
     // ===== Detailed versions that return error messages =====

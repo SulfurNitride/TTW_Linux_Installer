@@ -7,23 +7,28 @@ public static class Program
 {
     public static int Main(string[] args)
     {
-        var configFile = "ttw-config.json";
+        // Try multiple config file names for compatibility
+        var configFile = "mpi-config.json";
+        if (!File.Exists(configFile))
+        {
+            configFile = "ttw-config.json"; // Legacy compatibility
+        }
+
         var config = InstallConfig.FromFile(configFile);
 
         if (config == null)
         {
             config = InstallConfig.FromArgs(args);
 
-            bool missingPaths = string.IsNullOrWhiteSpace(config.Fallout3Root) ||
-                               string.IsNullOrWhiteSpace(config.FalloutNVRoot) ||
-                               string.IsNullOrWhiteSpace(config.MpiPackagePath) ||
-                               string.IsNullOrWhiteSpace(config.DestinationPath);
+            // Only MPI package and output are truly required (games are optional based on manifest)
+            bool missingRequired = string.IsNullOrWhiteSpace(config.MpiPackagePath) ||
+                                  string.IsNullOrWhiteSpace(config.DestinationPath);
 
-            if (missingPaths)
+            if (missingRequired)
             {
                 Console.WriteLine("❌ Missing required paths. Please provide configuration via:");
                 Console.WriteLine("   1. Command-line arguments (run with --help for details)");
-                Console.WriteLine("   2. Create a ttw-config.json file in the current directory");
+                Console.WriteLine("   2. Create a mpi-config.json file in the current directory");
                 Console.WriteLine();
                 InstallConfig.FromArgs(new[] { "--help" });
                 return 1;
@@ -31,7 +36,7 @@ public static class Program
         }
         else
         {
-            Console.WriteLine($"Loaded configuration from {configFile}\n");
+            Console.WriteLine($"✅ Loaded configuration from {configFile}\n");
             var cmdLineConfig = InstallConfig.FromArgs(args);
             config.StartInstallation = cmdLineConfig.StartInstallation;
         }
@@ -48,7 +53,7 @@ public static class Program
             }
             else
             {
-                Console.WriteLine("  ./TtwInstaller --fo3 <path> --fnv <path> --mpi <path> --output <path> --start");
+                Console.WriteLine("  ./TtwInstaller --mpi <path> --output <path> [--fo3 <path>] [--fnv <path>] [--oblivion <path>] --start");
             }
             Console.WriteLine();
             Console.WriteLine("Or run with --help for more information.");
@@ -62,7 +67,7 @@ public static class Program
 
     public static int RunInstallation(InstallConfig config)
     {
-        Console.WriteLine("=== TTW Installer ===\n");
+        Console.WriteLine("=== Universal MPI Installer ===\n");
 
         Console.WriteLine("Validating configuration...");
         try
@@ -398,7 +403,7 @@ public static class Program
         if (totalFails == 0)
         {
             Console.WriteLine("\n✅ Installation completed successfully!");
-            Console.WriteLine("TTW has been installed with all BSA archives created.");
+            Console.WriteLine("MPI package has been installed with all BSA archives created.");
         }
         else
         {

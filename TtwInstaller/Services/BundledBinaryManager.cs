@@ -4,9 +4,19 @@ namespace TtwInstaller.Services;
 
 /// <summary>
 /// Manages bundled native binaries (xdelta3, ffmpeg, etc.)
+///
+/// Version Tracking:
+/// - xdelta3: v3.1.0 (https://github.com/jmacd/xdelta)
+///   SHA1 (linux-x64): b64031ee8450f148a52bc10ff82e46bdee245ea2
+///
+/// See BUNDLED_BINARIES.md for full details on versions and sources.
 /// </summary>
 public static class BundledBinaryManager
 {
+    // Bundled binary versions - update when binaries are updated
+    public const string XDELTA3_VERSION = "3.1.0";
+    public const string XDELTA3_SOURCE = "https://github.com/jmacd/xdelta";
+
     private static string? _xdelta3Path;
     private static readonly object _lock = new();
 

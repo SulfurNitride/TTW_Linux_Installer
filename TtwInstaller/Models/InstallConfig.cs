@@ -10,10 +10,17 @@ public class InstallConfig
     /// </summary>
     public string Fallout3Root { get; set; } = string.Empty;
 
+    private string? _fallout3DataOverride;
+
     /// <summary>
     /// Fallout 3 Data directory
+    /// Can be overridden for special cases like BSA decompression
     /// </summary>
-    public string Fallout3Data => Path.Combine(Fallout3Root, "Data");
+    public string Fallout3Data
+    {
+        get => _fallout3DataOverride ?? Path.Combine(Fallout3Root, "Data");
+        set => _fallout3DataOverride = value;
+    }
 
     /// <summary>
     /// Fallout New Vegas root directory
@@ -50,7 +57,7 @@ public class InstallConfig
     }
 
     /// <summary>
-    /// Destination directory for TTW installation
+    /// Destination directory for MPI installation output
     /// </summary>
     public string DestinationPath { get; set; } = string.Empty;
 
@@ -61,30 +68,46 @@ public class InstallConfig
 
     /// <summary>
     /// Validate configuration
+    /// Universal validation - only validates paths that are provided.
+    /// The MPI manifest determines which game paths are actually needed.
     /// </summary>
     public void Validate()
     {
-        if (string.IsNullOrWhiteSpace(Fallout3Root))
-            throw new InvalidOperationException("Fallout 3 root path is required");
+        // Validate Fallout 3 path if provided
+        if (!string.IsNullOrWhiteSpace(Fallout3Root))
+        {
+            if (!Directory.Exists(Fallout3Root))
+                throw new DirectoryNotFoundException($"Fallout 3 directory not found: {Fallout3Root}");
 
-        if (!Directory.Exists(Fallout3Root))
-            throw new DirectoryNotFoundException($"Fallout 3 directory not found: {Fallout3Root}");
+            if (!File.Exists(Path.Combine(Fallout3Root, "Fallout3.exe")))
+                throw new FileNotFoundException($"Fallout3.exe not found in: {Fallout3Root}");
+        }
 
-        if (!File.Exists(Path.Combine(Fallout3Root, "Fallout3.exe")))
-            throw new FileNotFoundException("Fallout3.exe not found in Fallout 3 directory");
+        // Validate Fallout New Vegas path if provided
+        if (!string.IsNullOrWhiteSpace(FalloutNVRoot))
+        {
+            if (!Directory.Exists(FalloutNVRoot))
+                throw new DirectoryNotFoundException($"Fallout New Vegas directory not found: {FalloutNVRoot}");
 
-        if (string.IsNullOrWhiteSpace(FalloutNVRoot))
-            throw new InvalidOperationException("Fallout New Vegas root path is required");
+            if (!File.Exists(Path.Combine(FalloutNVRoot, "FalloutNV.exe")))
+                throw new FileNotFoundException($"FalloutNV.exe not found in: {FalloutNVRoot}");
+        }
 
-        if (!Directory.Exists(FalloutNVRoot))
-            throw new DirectoryNotFoundException($"Fallout New Vegas directory not found: {FalloutNVRoot}");
+        // Validate Oblivion path if provided
+        if (!string.IsNullOrWhiteSpace(OblivionRoot))
+        {
+            if (!Directory.Exists(OblivionRoot))
+                throw new DirectoryNotFoundException($"Oblivion directory not found: {OblivionRoot}");
 
-        if (!File.Exists(Path.Combine(FalloutNVRoot, "FalloutNV.exe")))
-            throw new FileNotFoundException("FalloutNV.exe not found in Fallout New Vegas directory");
+            if (!File.Exists(Path.Combine(OblivionRoot, "Oblivion.exe")))
+                throw new FileNotFoundException($"Oblivion.exe not found in: {OblivionRoot}");
+        }
 
+        // Destination path is always required
         if (string.IsNullOrWhiteSpace(DestinationPath))
             throw new InvalidOperationException("Destination path is required");
 
+        // MPI package path is always required
         if (string.IsNullOrWhiteSpace(MpiPackagePath))
             throw new InvalidOperationException("MPI package path is required");
 
@@ -121,6 +144,9 @@ public class InstallConfig
                     break;
                 case "--fnv" when i + 1 < args.Length:
                     config.FalloutNVRoot = args[++i];
+                    break;
+                case "--oblivion" when i + 1 < args.Length:
+                    config.OblivionRoot = args[++i];
                     break;
                 case "--output" or "-o" when i + 1 < args.Length:
                     config.DestinationPath = args[++i];
@@ -183,36 +209,48 @@ public class InstallConfig
 
     private static void PrintHelp()
     {
-        Console.WriteLine("TTW Installer - Tale of Two Wastelands Installation Tool");
+        Console.WriteLine("Universal MPI Installer - Installs any MPI package");
         Console.WriteLine();
         Console.WriteLine("Usage:");
-        Console.WriteLine("  ttw-installer [options] --start");
+        Console.WriteLine("  mpi-installer [options] --start");
         Console.WriteLine();
         Console.WriteLine("Options:");
-        Console.WriteLine("  --fo3 <path>        Path to Fallout 3 installation directory");
-        Console.WriteLine("  --fnv <path>        Path to Fallout New Vegas installation directory");
-        Console.WriteLine("  --mpi <path>        Path to extracted TTW MPI package");
-        Console.WriteLine("  --output <path>     Output directory for TTW installation");
+        Console.WriteLine("  --fo3 <path>        Path to Fallout 3 installation directory (if needed)");
+        Console.WriteLine("  --fnv <path>        Path to Fallout New Vegas installation directory (if needed)");
+        Console.WriteLine("  --oblivion <path>   Path to Oblivion installation directory (if needed)");
+        Console.WriteLine("  --mpi <path>        Path to MPI package file (.mpi) or extracted directory");
+        Console.WriteLine("  --output <path>     Output directory for installation");
         Console.WriteLine("  -o <path>           Alias for --output");
         Console.WriteLine("  --start             Start the installation (REQUIRED)");
         Console.WriteLine("  --help, -h          Show this help message");
         Console.WriteLine();
-        Console.WriteLine("Example:");
-        Console.WriteLine("  ttw-installer --fo3 ~/.steam/steam/steamapps/common/\"Fallout 3 goty\" \\");
+        Console.WriteLine("Example (TTW):");
+        Console.WriteLine("  mpi-installer --fo3 ~/.steam/steam/steamapps/common/\"Fallout 3 goty\" \\");
         Console.WriteLine("                --fnv ~/.steam/steam/steamapps/common/\"Fallout New Vegas\" \\");
-        Console.WriteLine("                --mpi ~/Downloads/TaleOfTwoWastelands-v3.3.2 \\");
+        Console.WriteLine("                --mpi ~/Downloads/TaleOfTwoWastelands-v3.3.2.mpi \\");
         Console.WriteLine("                --output ~/TTW \\");
         Console.WriteLine("                --start");
         Console.WriteLine();
+        Console.WriteLine("Example (Oblivion BSA Decompressor):");
+        Console.WriteLine("  mpi-installer --oblivion ~/.steam/steam/steamapps/common/Oblivion \\");
+        Console.WriteLine("                --mpi ~/Downloads/OblivionBSADecompressor.mpi \\");
+        Console.WriteLine("                --output ~/OblivionDecompressed \\");
+        Console.WriteLine("                --start");
+        Console.WriteLine();
         Console.WriteLine("Configuration File:");
-        Console.WriteLine("  You can also create a 'ttw-config.json' file in the current directory with:");
+        Console.WriteLine("  You can also create a 'mpi-config.json' file in the current directory with:");
         Console.WriteLine("  {");
-        Console.WriteLine("    \"Fallout3Root\": \"/path/to/fo3\",");
-        Console.WriteLine("    \"FalloutNVRoot\": \"/path/to/fnv\",");
-        Console.WriteLine("    \"MpiPackagePath\": \"/path/to/mpi\",");
-        Console.WriteLine("    \"DestinationPath\": \"/path/to/output\"");
+        Console.WriteLine("    \"Fallout3Root\": \"/path/to/fo3\",       // Optional");
+        Console.WriteLine("    \"FalloutNVRoot\": \"/path/to/fnv\",      // Optional");
+        Console.WriteLine("    \"OblivionRoot\": \"/path/to/oblivion\",  // Optional");
+        Console.WriteLine("    \"MpiPackagePath\": \"/path/to/mpi\",     // Required");
+        Console.WriteLine("    \"DestinationPath\": \"/path/to/output\"  // Required");
         Console.WriteLine("  }");
         Console.WriteLine();
-        Console.WriteLine("  Then run: ttw-installer --start");
+        Console.WriteLine("  Then run: mpi-installer --start");
+        Console.WriteLine();
+        Console.WriteLine("Notes:");
+        Console.WriteLine("  - The MPI manifest determines which game paths are actually required");
+        Console.WriteLine("  - Only provide paths for games used by your specific MPI package");
     }
 }

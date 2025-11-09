@@ -67,6 +67,8 @@ public class PostCommandRunner
         // Replace all path variables
         var command = ResolveVariables(commandValue);
 
+        Console.WriteLine($"  Executing: {command}");
+
         // Parse Windows cmd.exe commands
         if (command.Contains("cmd.exe") && command.Contains("/C"))
         {
@@ -106,10 +108,38 @@ public class PostCommandRunner
                     {
                         var newPath = Path.Combine(Path.GetDirectoryName(oldPath) ?? _destinationPath, newFileName);
 
+                        Console.WriteLine($"    Old path: {oldPath}");
+                        Console.WriteLine($"    New path: {newPath}");
+                        Console.WriteLine($"    File exists: {File.Exists(oldPath)}");
+
+                        // Try case-insensitive file search on Linux (case matters!)
+                        if (!File.Exists(oldPath))
+                        {
+                            var directory = Path.GetDirectoryName(oldPath) ?? _destinationPath;
+                            var fileName = Path.GetFileName(oldPath);
+
+                            if (Directory.Exists(directory))
+                            {
+                                var matchingFiles = Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                                    .Where(f => string.Equals(Path.GetFileName(f), fileName, StringComparison.OrdinalIgnoreCase))
+                                    .ToArray();
+
+                                if (matchingFiles.Length == 1)
+                                {
+                                    oldPath = matchingFiles[0];
+                                    Console.WriteLine($"    Found case-insensitive match: {oldPath}");
+                                }
+                            }
+                        }
+
                         if (File.Exists(oldPath))
                         {
                             File.Move(oldPath, newPath, overwrite: true);
                             Console.WriteLine($"  Renamed: {Path.GetFileName(oldPath)} → {Path.GetFileName(newPath)}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"  ⚠️  File not found: {oldPath}");
                         }
                         return true;
                     }
@@ -164,11 +194,16 @@ public class PostCommandRunner
         // Replace game-specific variables if config is available
         if (_config != null)
         {
+            // Replace FO3 variables (check Data path since it might be overridden)
             if (!string.IsNullOrEmpty(_config.Fallout3Root))
             {
                 resolved = resolved.Replace("%FO3ROOT%", _config.Fallout3Root);
+            }
+            if (!string.IsNullOrEmpty(_config.Fallout3Data))
+            {
                 resolved = resolved.Replace("%FO3DATA%", _config.Fallout3Data);
             }
+
             // Replace FNV variables (check Data path since it might be overridden)
             if (!string.IsNullOrEmpty(_config.FalloutNVRoot))
             {
