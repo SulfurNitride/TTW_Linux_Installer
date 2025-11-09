@@ -1,0 +1,113 @@
+name: Build Universal MPI Installer
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build GUI
+      run: |
+        dotnet publish TtwInstallerGui/TtwInstallerGui.csproj \
+          -c Release \
+          -r linux-x64 \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:EnableCompressionInSingleFile=true
+
+    - name: Build CLI
+      run: |
+        dotnet publish TtwInstaller/TtwInstaller.csproj \
+          -c Release \
+          -r linux-x64 \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:EnableCompressionInSingleFile=true
+
+    - name: Package release
+      run: |
+        mkdir -p release
+        cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/ttw_linux_gui release/
+        cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/libbsa_capi.so release/
+        cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/xdelta3 release/
+        cp TtwInstaller/bin/Release/net9.0/linux-x64/publish/TtwInstaller release/
+        cp README.md release/
+        cp TtwInstaller/mpi-config.json.example release/
+        chmod +x release/ttw_linux_gui
+        chmod +x release/TtwInstaller
+        chmod +x release/xdelta3
+
+    - name: Create archive
+      run: |
+        cd release
+        tar -czf ../universal-mpi-installer-linux-x64.tar.gz ./*
+        cd ..
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: universal-mpi-installer-linux-x64
+        path: release/
+        retention-days: 30
+
+    - name: Upload archive artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: universal-mpi-installer-archive
+        path: universal-mpi-installer-linux-x64.tar.gz
+        retention-days: 30
+
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          universal-mpi-installer-linux-x64.tar.gz
+        body: |
+          ## Universal MPI Installer for Linux
+
+          ### What's New
+          - Universal MPI support (auto-detects game requirements)
+          - 4-6x faster with parallel processing
+          - Works with TTW, BSA Decompressors, and more
+
+          ### Installation
+          1. Download `universal-mpi-installer-linux-x64.tar.gz`
+          2. Extract: `tar -xzf universal-mpi-installer-linux-x64.tar.gz`
+          3. Run: `./ttw_linux_gui`
+
+          ### Requirements
+          - FFmpeg (install via your package manager)
+
+          ### Files Included
+          - `ttw_linux_gui` - GUI application
+          - `TtwInstaller` - CLI tool
+          - `libbsa_capi.so` - BSA library
+          - `xdelta3` - Patching tool
+          - `README.md` - Documentation
+          - `mpi-config.json.example` - Config example
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
