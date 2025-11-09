@@ -23,7 +23,9 @@ jobs:
         dotnet-version: '9.0.x'
 
     - name: Restore dependencies
-      run: dotnet restore
+      run: |
+        dotnet restore TtwInstallerGui/TtwInstallerGui.csproj
+        dotnet restore TtwInstaller/TtwInstaller.csproj
 
     - name: Build GUI
       run: |
