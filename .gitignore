@@ -43,6 +43,12 @@ mpi-config.json
 
 # Distribution builds (too large for GitHub)
 publish/
+release/
+*.tar.gz
+*.zip
 
 # Session notes (development only)
 SESSION_NOTES*.md
+
+# Claude Code settings (local only)
+.claude/
