@@ -1,0 +1,54 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TtwInstallerGui.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="250"
+        x:Class="TtwInstallerGui.Views.SettingsWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Settings"
+        Width="550" Height="250"
+        MinWidth="500" MinHeight="200"
+        WindowStartupLocation="CenterOwner"
+        CanResize="false">
+
+    <DockPanel Margin="20">
+        <!-- Title -->
+        <TextBlock DockPanel.Dock="Top"
+                   Text="Settings"
+                   FontSize="20"
+                   FontWeight="Bold"
+                   Margin="0,0,0,20"/>
+
+        <!-- Settings Content -->
+        <StackPanel DockPanel.Dock="Top" Spacing="20">
+            <!-- BSA Creation Setting -->
+            <Border BorderBrush="Gray" BorderThickness="1" Padding="15" CornerRadius="5">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="BSA Archive Creation"
+                               FontWeight="Bold"
+                               FontSize="14"/>
+                    <CheckBox IsChecked="{Binding UniversalCreateBsas}"
+                              Content="Always create BSA files. It is recommended to leave on."
+                              Margin="0,5,0,0"/>
+                    <TextBlock TextWrapping="Wrap"
+                               Foreground="Gray"
+                               FontSize="12"
+                               Margin="25,5,0,0">
+                        If turned off, there will be no BSA files created no matter what and they will be loose files instead.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- Close Button -->
+        <Button DockPanel.Dock="Bottom"
+                Content="Close"
+                Width="100"
+                Height="35"
+                HorizontalAlignment="Right"
+                Margin="0,20,0,0"
+                Click="CloseButton_Click"/>
+    </DockPanel>
+
+</Window>

@@ -28,16 +28,19 @@ public static class DependencyChecker
             missing.Add("xdelta3 (bundled binary missing - reinstall required)");
         }
 
-        // Check ffmpeg (system dependency)
-        Console.Write("  Checking ffmpeg (system)... ");
-        if (!IsCommandAvailable("ffmpeg"))
+        // Check ffmpeg (bundled or system)
+        Console.Write("  Checking ffmpeg (bundled or system)... ");
+        if (BundledBinaryManager.IsFfmpegAvailable())
         {
-            missing.Add("ffmpeg");
-            Console.WriteLine("❌ NOT FOUND");
+            var ffmpegPath = BundledBinaryManager.GetFfmpegPath();
+            var isBundled = Path.GetDirectoryName(ffmpegPath)?.Contains(AppContext.BaseDirectory) ?? false;
+            var source = isBundled ? "bundled" : "system";
+            Console.WriteLine($"✅ Found ({source})");
         }
         else
         {
-            Console.WriteLine("✅ Found");
+            missing.Add("ffmpeg");
+            Console.WriteLine("❌ NOT FOUND");
         }
 
         Console.WriteLine();
@@ -59,7 +62,7 @@ public static class DependencyChecker
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "where" : "which",
+                FileName = "which",
                 Arguments = command,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -83,62 +86,47 @@ public static class DependencyChecker
     {
         Console.WriteLine("Please install the missing dependencies:\n");
 
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        // Detect distro
+        string distro = DetectLinuxDistro();
+
+        Console.WriteLine($"Detected: {distro}\n");
+
+        switch (distro.ToLower())
         {
-            // Detect distro
-            string distro = DetectLinuxDistro();
+            case "ubuntu":
+            case "debian":
+            case "mint":
+            case "pop":
+                Console.WriteLine($"  sudo apt install {string.Join(" ", missing)}");
+                break;
 
-            Console.WriteLine($"Detected: {distro}\n");
+            case "fedora":
+            case "rhel":
+            case "centos":
+                Console.WriteLine($"  sudo dnf install {string.Join(" ", missing)}");
+                break;
 
-            switch (distro.ToLower())
-            {
-                case "ubuntu":
-                case "debian":
-                case "mint":
-                case "pop":
-                    Console.WriteLine($"  sudo apt install {string.Join(" ", missing)}");
-                    break;
+            case "arch":
+            case "manjaro":
+            case "endeavouros":
+                Console.WriteLine($"  sudo pacman -S {string.Join(" ", missing)}");
+                break;
 
-                case "fedora":
-                case "rhel":
-                case "centos":
-                    Console.WriteLine($"  sudo dnf install {string.Join(" ", missing)}");
-                    break;
+            case "opensuse":
+                Console.WriteLine($"  sudo zypper install {string.Join(" ", missing)}");
+                break;
 
-                case "arch":
-                case "manjaro":
-                case "endeavouros":
-                    Console.WriteLine($"  sudo pacman -S {string.Join(" ", missing)}");
-                    break;
+            case "bazzite":
+            case "silverblue":
+            case "kinoite":
+                Console.WriteLine("  Immutable OS detected. Install via Flatpak or layer packages:");
+                Console.WriteLine($"  rpm-ostree install {string.Join(" ", missing)}");
+                Console.WriteLine("  (Requires reboot)");
+                break;
 
-                case "opensuse":
-                    Console.WriteLine($"  sudo zypper install {string.Join(" ", missing)}");
-                    break;
-
-                case "bazzite":
-                case "silverblue":
-                case "kinoite":
-                    Console.WriteLine("  Immutable OS detected. Install via Flatpak or layer packages:");
-                    Console.WriteLine($"  rpm-ostree install {string.Join(" ", missing)}");
-                    Console.WriteLine("  (Requires reboot)");
-                    break;
-
-                default:
-                    Console.WriteLine($"  Install using your package manager: {string.Join(", ", missing)}");
-                    break;
-            }
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            Console.WriteLine("  Download from:");
-            if (missing.Contains("xdelta3"))
-                Console.WriteLine("    xdelta3: https://github.com/jmacd/xdelta/releases");
-            if (missing.Contains("ffmpeg"))
-                Console.WriteLine("    ffmpeg: https://ffmpeg.org/download.html");
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            Console.WriteLine($"  brew install {string.Join(" ", missing)}");
+            default:
+                Console.WriteLine($"  Install using your package manager: {string.Join(", ", missing)}");
+                break;
         }
 
         Console.WriteLine();

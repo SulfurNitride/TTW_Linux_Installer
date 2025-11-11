@@ -388,7 +388,7 @@ public class AssetProcessor
                 {
                     StartInfo = new System.Diagnostics.ProcessStartInfo
                     {
-                        FileName = "ffmpeg",
+                        FileName = BundledBinaryManager.GetFfmpegPath(),
                         Arguments = $"-nostdin -hide_banner -loglevel error -i \"{tempInput}\" -ar {frequency} -c:a libvorbis -y \"{tempOutput}\"",
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
@@ -544,7 +544,7 @@ public class AssetProcessor
                 {
                     StartInfo = new System.Diagnostics.ProcessStartInfo
                     {
-                        FileName = "ffmpeg",
+                        FileName = BundledBinaryManager.GetFfmpegPath(),
                         Arguments = string.Join(" ", ffmpegArgs),
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,

@@ -11,6 +11,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TtwInstaller.Models;
 using TtwInstaller.Services;
+using TtwInstallerGui.Models;
 
 namespace TtwInstallerGui.ViewModels;
 
@@ -78,13 +79,73 @@ public partial class MainWindowViewModel : ObservableObject
     private string? _universalCachedExtractedPath;
 
     private Window? _mainWindow;
+    private UserConfig _userConfig = new UserConfig();
+
+    public MainWindowViewModel()
+    {
+        // Load saved user config
+        LoadConfig();
+    }
 
     public void SetMainWindow(Window window)
     {
         _mainWindow = window;
     }
 
+    private void LoadConfig()
+    {
+        _userConfig = UserConfig.Load();
+
+        // Restore saved paths
+        if (!string.IsNullOrEmpty(_userConfig.Fallout3Path))
+            UniversalFo3Path = _userConfig.Fallout3Path;
+
+        if (!string.IsNullOrEmpty(_userConfig.FalloutNVPath))
+            UniversalFnvPath = _userConfig.FalloutNVPath;
+
+        if (!string.IsNullOrEmpty(_userConfig.OblivionPath))
+            UniversalOblivionPath = _userConfig.OblivionPath;
+
+        if (!string.IsNullOrEmpty(_userConfig.OutputPath))
+            UniversalOutputPath = _userConfig.OutputPath;
+
+        // Restore BSA creation setting
+        UniversalCreateBsas = _userConfig.CreateBsas;
+    }
+
+    private void SaveConfig()
+    {
+        _userConfig.Fallout3Path = UniversalFo3Path;
+        _userConfig.FalloutNVPath = UniversalFnvPath;
+        _userConfig.OblivionPath = UniversalOblivionPath;
+        _userConfig.OutputPath = UniversalOutputPath;
+        _userConfig.LastMpiPath = UniversalMpiPath;
+        _userConfig.CreateBsas = UniversalCreateBsas;
+        _userConfig.Save();
+    }
+
+    // Auto-save when paths change
+    partial void OnUniversalFo3PathChanged(string value) => SaveConfig();
+    partial void OnUniversalFnvPathChanged(string value) => SaveConfig();
+    partial void OnUniversalOblivionPathChanged(string value) => SaveConfig();
+    partial void OnUniversalOutputPathChanged(string value) => SaveConfig();
+    partial void OnUniversalMpiPathChanged(string value) => SaveConfig();
+    partial void OnUniversalCreateBsasChanged(bool value) => SaveConfig();
+
     // ========== Universal MPI Installer Methods ==========
+
+    [RelayCommand]
+    private async Task OpenSettings()
+    {
+        if (_mainWindow == null) return;
+
+        var settingsWindow = new Views.SettingsWindow
+        {
+            DataContext = this
+        };
+
+        await settingsWindow.ShowDialog(_mainWindow);
+    }
 
     [RelayCommand]
     private async Task UniversalBrowseMpi()
@@ -352,14 +413,60 @@ public partial class MainWindowViewModel : ObservableObject
             MpiPackagePath = packagePath
         };
 
+        // Set Data paths (these auto-calculate as Root/Data if not explicitly set)
+        // The properties have getters that return Root + "Data" by default
+        // This is critical for %FO3DATA%, %FNVDATA%, %TES4DATA% variable replacement
+
+        // Debug: Log resolved data paths
+        AppendUniversalLog($"\nResolved Data Paths:");
+        if (!string.IsNullOrEmpty(config.Fallout3Root))
+            AppendUniversalLog($"  FO3DATA: {config.Fallout3Data}");
+        if (!string.IsNullOrEmpty(config.FalloutNVRoot))
+            AppendUniversalLog($"  FNVDATA: {config.FalloutNVData}");
+        if (!string.IsNullOrEmpty(config.OblivionRoot))
+            AppendUniversalLog($"  TES4DATA: {config.OblivionData}");
+        AppendUniversalLog($"  DESTINATION: {config.DestinationPath}\n");
+
+        // Run pre-flight validation checks
+        var checks = _universalCachedManifest.Checks;
+        if (checks != null && checks.Count > 0)
+        {
+            AppendUniversalLog($"\n=== Running Pre-Flight Validation ({checks.Count} checks) ===\n");
+
+            var validationLocationResolver = new LocationResolver(locations, config);
+            var validationService = new ValidationService(config, validationLocationResolver);
+            var (validationPassed, errorDetails) = validationService.RunValidationChecksWithDetails(checks);
+
+            if (!validationPassed)
+            {
+                AppendUniversalLog("\n❌ Validation failed. Installation cannot continue.");
+                AppendUniversalLog("Please verify your game files and try again.\n");
+                if (!string.IsNullOrEmpty(errorDetails))
+                {
+                    AppendUniversalLog($"\n{errorDetails}\n");
+                }
+                throw new Exception("Validation failed");
+            }
+
+            AppendUniversalLog("✅ All validation checks passed\n");
+        }
+
+        // Debug: Log location mappings
+        AppendUniversalLog($"Location Mappings:");
+        for (int i = 0; i < Math.Min(locations.Count, 10); i++)
+        {
+            AppendUniversalLog($"  [{i}] Type={locations[i].Type} Value={locations[i].Value}");
+        }
+        AppendUniversalLog("");
+
         // Create services
         var locationResolver = new LocationResolver(locations, config);
         using var bsaReader = new BsaReader();
         var logger = new InstallationLogger();
 
-        // Check if we need BSA creation (for NMC and similar packages)
+        // Create BSA writer if enabled in settings (default: ON)
         BsaWriter? bsaWriter = null;
-        if (UniversalShowBsaOption && UniversalCreateBsas)
+        if (UniversalCreateBsas)
         {
             bsaWriter = new BsaWriter(locations, UniversalOutputPath);
         }
@@ -521,6 +628,10 @@ public partial class MainWindowViewModel : ObservableObject
             {
                 AppendUniversalLog("✅ All BSA archives written successfully");
             }
+
+            // Clean up temp staging directory
+            bsaWriter.Dispose();
+            AppendUniversalLog("");
         }
 
         // Run post-commands (95-100%)

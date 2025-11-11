@@ -16,7 +16,6 @@ NC='\033[0m' # No Color
 
 # Configuration
 GUI_PROJECT="TtwInstallerGui/TtwInstallerGui.csproj"
-CLI_PROJECT="TtwInstaller/TtwInstaller.csproj"
 OUTPUT_DIR="release"
 RUNTIME="linux-x64"
 
@@ -54,14 +53,19 @@ check_dependencies() {
 clean_build() {
     print_info "Cleaning previous builds..."
 
-    # Clean project builds
+    # Clean project build
     dotnet clean "$GUI_PROJECT" -c Release > /dev/null 2>&1 || true
-    dotnet clean "$CLI_PROJECT" -c Release > /dev/null 2>&1 || true
 
     # Remove old release directory
     if [ -d "$OUTPUT_DIR" ]; then
         rm -rf "$OUTPUT_DIR"
         print_success "Removed old release directory"
+    fi
+
+    # Remove old archive
+    if [ -f "universal-mpi-installer-linux-x64.tar.gz" ]; then
+        rm -f "universal-mpi-installer-linux-x64.tar.gz"
+        print_success "Removed old archive"
     fi
 
     print_success "Clean complete"
@@ -84,44 +88,17 @@ build_gui() {
     print_success "GUI build complete"
 }
 
-build_cli() {
-    print_info "Building CLI (TtwInstaller)..."
-    echo ""
-
-    dotnet publish "$CLI_PROJECT" \
-        -c Release \
-        -r "$RUNTIME" \
-        --self-contained true \
-        -p:PublishSingleFile=true \
-        -p:IncludeNativeLibrariesForSelfExtract=true \
-        -p:EnableCompressionInSingleFile=true \
-        --nologo
-
-    echo ""
-    print_success "CLI build complete"
-}
-
 package_release() {
     print_info "Packaging release..."
 
     # Create release directory
     mkdir -p "$OUTPUT_DIR"
 
-    # Copy GUI files
-    cp TtwInstallerGui/bin/Release/net9.0/$RUNTIME/publish/ttw_linux_gui "$OUTPUT_DIR/"
-    cp TtwInstallerGui/bin/Release/net9.0/$RUNTIME/publish/libbsa_capi.so "$OUTPUT_DIR/"
-    cp TtwInstallerGui/bin/Release/net9.0/$RUNTIME/publish/xdelta3 "$OUTPUT_DIR/"
-
-    # Copy CLI files
-    cp TtwInstaller/bin/Release/net9.0/$RUNTIME/publish/TtwInstaller "$OUTPUT_DIR/"
-
-    # Copy documentation
-    cp README.md "$OUTPUT_DIR/"
-    cp TtwInstaller/mpi-config.json.example "$OUTPUT_DIR/"
+    # Copy all files from GUI publish directory
+    cp -r TtwInstallerGui/bin/Release/net9.0/$RUNTIME/publish/* "$OUTPUT_DIR/"
 
     # Make executables executable
     chmod +x "$OUTPUT_DIR/ttw_linux_gui"
-    chmod +x "$OUTPUT_DIR/TtwInstaller"
     chmod +x "$OUTPUT_DIR/xdelta3"
 
     print_success "Release packaged in $OUTPUT_DIR/"
@@ -147,16 +124,15 @@ show_summary() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo "Build outputs:"
-    echo "  • GUI:     $OUTPUT_DIR/ttw_linux_gui"
-    echo "  • CLI:     $OUTPUT_DIR/TtwInstaller"
-    echo "  • Archive: universal-mpi-installer-linux-x64.tar.gz"
+    echo "  • Release:  $OUTPUT_DIR/"
+    echo "  • Archive:  universal-mpi-installer-linux-x64.tar.gz"
     echo ""
     echo "To run:"
     echo "  cd $OUTPUT_DIR"
     echo "  ./ttw_linux_gui"
     echo ""
-    echo "File sizes:"
-    ls -lh "$OUTPUT_DIR" | grep -E "(ttw_linux_gui|TtwInstaller|libbsa_capi|xdelta3)" | awk '{print "  • " $9 ": " $5}'
+    echo "Files in release directory:"
+    ls -lh "$OUTPUT_DIR" | grep -v "^total" | grep -v "^d" | awk '{print "  • " $9 " (" $5 ")"}'
 }
 
 show_help() {
@@ -165,19 +141,15 @@ show_help() {
     echo "Options:"
     echo "  -h, --help       Show this help message"
     echo "  -c, --clean      Clean build artifacts and exit"
-    echo "  --gui-only       Build only the GUI"
-    echo "  --cli-only       Build only the CLI"
     echo "  --no-archive     Skip creating release archive"
     echo ""
     echo "Examples:"
     echo "  ./build.sh              # Full build with archive"
-    echo "  ./build.sh --gui-only   # Build only GUI"
+    echo "  ./build.sh --no-archive # Build without creating .tar.gz"
     echo "  ./build.sh --clean      # Clean all build artifacts"
 }
 
 # Parse arguments
-GUI_ONLY=false
-CLI_ONLY=false
 NO_ARCHIVE=false
 CLEAN_ONLY=false
 
@@ -189,14 +161,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--clean)
             CLEAN_ONLY=true
-            shift
-            ;;
-        --gui-only)
-            GUI_ONLY=true
-            shift
-            ;;
-        --cli-only)
-            CLI_ONLY=true
             shift
             ;;
         --no-archive)
@@ -226,16 +190,8 @@ if [ "$CLEAN_ONLY" = true ]; then
     exit 0
 fi
 
-# Build based on flags
-if [ "$CLI_ONLY" = true ]; then
-    build_cli
-elif [ "$GUI_ONLY" = true ]; then
-    build_gui
-else
-    build_gui
-    echo ""
-    build_cli
-fi
+# Build (GUI includes everything)
+build_gui
 
 echo ""
 package_release

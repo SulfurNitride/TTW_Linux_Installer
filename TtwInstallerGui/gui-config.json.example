@@ -1,0 +1,27 @@
+{
+  "Fallout3Path": "",
+  "FalloutNVPath": "",
+  "OblivionPath": "",
+  "OutputPath": "",
+  "LastMpiPath": "",
+  "CreateBsas": true
+}
+
+// This file is created automatically by the GUI application.
+// It saves your game paths and settings so you don't have to configure them every time.
+//
+// The file is saved as 'gui-config.json' next to the executable.
+// You can manually edit it if needed, or delete it to reset all settings.
+//
+// Settings:
+//   CreateBsas: true to pack files into BSA archives (default, recommended)
+//               false to install as loose files
+//
+// Example:
+// {
+//   "Fallout3Path": "/home/user/.steam/steam/steamapps/common/Fallout 3 goty",
+//   "FalloutNVPath": "/home/user/.steam/steam/steamapps/common/Fallout New Vegas",
+//   "OutputPath": "/home/user/TTW",
+//   "LastMpiPath": "/home/user/Downloads/TaleOfTwoWastelands-v3.3.2.mpi",
+//   "CreateBsas": true
+// }

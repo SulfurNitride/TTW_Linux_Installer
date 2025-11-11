@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using BsaLib;
 using TtwInstaller.Models;
@@ -167,9 +168,34 @@ public class BsaWriter : IDisposable
 
     /// <summary>
     /// Write a single BSA archive (reads files from temp directory)
+    /// On Windows: Uses bsarch.exe
+    /// On Linux: Uses libbsa
     /// </summary>
     private bool WriteBsa(BsaArchive bsa)
     {
+        var outputPath = Path.Combine(_destinationPath, bsa.Name);
+
+        // Windows: Use bsarch.exe
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            // Extract flags as integers for bsarch command line
+            int archiveFlags = (int)bsa.ArchiveFlags;
+            int fileFlags = (int)bsa.ArchiveTypes;
+
+            // Check if compression flag is set
+            bool compress = (bsa.ArchiveFlags & BsaInterop.ArchiveFlags.Compressed) != 0;
+
+            return BsarchWrapper.PackArchive(
+                bsa.TempDirectory,
+                outputPath,
+                "fnv",
+                archiveFlags,
+                fileFlags,
+                compress,
+                multiThreaded: true);
+        }
+
+        // Linux: Use native libbsa
         IntPtr handle = IntPtr.Zero;
         try
         {
@@ -220,7 +246,6 @@ public class BsaWriter : IDisposable
             }
 
             // Write BSA to disk
-            var outputPath = Path.Combine(_destinationPath, bsa.Name);
             int writeResult = BsaInterop.bsa_write(
                 handle,
                 outputPath,

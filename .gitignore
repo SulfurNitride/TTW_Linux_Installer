@@ -12,9 +12,12 @@ obj/
 
 # Build artifacts
 *.dll
-*.exe
 *.pdb
 *.cache
+
+# Except bundled binaries (needed for distribution)
+!TtwInstaller/BundledBinaries/**/xdelta3
+!TtwInstaller/BundledBinaries/**/ffmpeg
 
 # .NET Core
 project.lock.json
@@ -35,6 +38,7 @@ artifacts/
 # Config files (user-specific)
 ttw-config.json
 mpi-config.json
+gui-config.json
 *-config.json
 !*-config.json.example
 
@@ -52,3 +56,6 @@ SESSION_NOTES*.md
 
 # Claude Code settings (local only)
 .claude/
+
+# LibBSA source (build dependency only)
+LibBSA/

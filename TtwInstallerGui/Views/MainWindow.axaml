@@ -11,19 +11,25 @@
         MinWidth="800" MinHeight="650">
 
     <DockPanel Margin="20">
-        <!-- Main Title -->
-        <TextBlock DockPanel.Dock="Top"
-                   Text="Universal MPI Installer"
-                   FontSize="24"
-                   FontWeight="Bold"
-                   Margin="0,0,0,15"/>
-
-        <TextBlock DockPanel.Dock="Top"
-                   TextWrapping="Wrap"
-                   Foreground="Gray"
-                   Margin="0,0,0,15">
-            This universal installer can install any MPI package. Select an MPI file to automatically detect required paths.
-        </TextBlock>
+        <!-- Header with Title and Settings Button -->
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,15">
+            <Button DockPanel.Dock="Right"
+                    Content="⚙️ Settings"
+                    Command="{Binding OpenSettingsCommand}"
+                    Width="120"
+                    Height="35"
+                    VerticalAlignment="Top"/>
+            <StackPanel>
+                <TextBlock Text="Universal MPI Installer"
+                           FontSize="24"
+                           FontWeight="Bold"/>
+                <TextBlock TextWrapping="Wrap"
+                           Foreground="Gray"
+                           Margin="0,10,0,0">
+                    This universal installer can install any MPI package. Select an MPI file to automatically detect required paths.
+                </TextBlock>
+            </StackPanel>
+        </DockPanel>
 
         <!-- MPI File Selection -->
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,20">
@@ -74,13 +80,6 @@
                 <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding UniversalBrowseOutputCommand}"/>
                 <TextBox Text="{Binding UniversalOutputPath}" IsReadOnly="False" Watermark="Where to install files (required)"/>
             </DockPanel>
-
-            <!-- BSA Creation Option (conditionally visible) -->
-            <CheckBox IsVisible="{Binding UniversalShowBsaOption}"
-                      IsChecked="{Binding UniversalCreateBsas}"
-                      Content="Create BSA archives (recommended)"
-                      Margin="120,10,0,0"
-                      ToolTip.Tip="Enable to create BSA files. Disable to extract as loose files."/>
         </StackPanel>
 
         <!-- Progress Section -->

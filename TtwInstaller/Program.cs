@@ -142,17 +142,9 @@ public static class Program
 
         if (!validationPassed)
         {
-            Console.WriteLine("❌ Validation failed. Please fix the issues above before continuing.");
-            Console.Write("\nContinue anyway? (yes/no): ");
-            string? response = Console.ReadLine();
-
-            if (response?.Trim().ToLower() != "yes")
-            {
-                Console.WriteLine("Installation aborted.");
-                return 1;
-            }
-
-            Console.WriteLine("\n⚠️  Continuing despite validation failures...\n");
+            Console.WriteLine("\n❌ Validation failed. Installation cannot continue.");
+            Console.WriteLine("Please verify your game files and try again.\n");
+            return 1; // Exit immediately on validation failure
         }
 
         using var bsaReader = new BsaReader();

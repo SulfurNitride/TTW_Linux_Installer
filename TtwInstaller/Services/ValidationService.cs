@@ -198,18 +198,48 @@ public class ValidationService
                 .Where(s => !string.IsNullOrEmpty(s))
                 .ToList();
 
+            // Calculate both MD5 and SHA1
             Console.Write($"🔍 Verifying {check.File}... ");
-            string actualChecksum = ChecksumHelper.CalculateSHA1(filePath);
+            string actualMD5 = ChecksumHelper.CalculateMD5(filePath);
+            string actualSHA1 = ChecksumHelper.CalculateSHA1(filePath);
 
-            bool checksumMatches = expectedChecksums.Any(expected =>
-                string.Equals(expected, actualChecksum, StringComparison.OrdinalIgnoreCase));
+            // Check if ANY expected checksum matches ANY hash type
+            bool checksumMatches = false;
+            string matchedHash = "";
+            string hashType = "";
+
+            foreach (var expected in expectedChecksums)
+            {
+                var trimmed = expected.Trim();
+
+                // Try MD5
+                if (trimmed.Length == 32 && string.Equals(trimmed, actualMD5, StringComparison.OrdinalIgnoreCase))
+                {
+                    checksumMatches = true;
+                    matchedHash = actualMD5;
+                    hashType = "MD5";
+                    break;
+                }
+
+                // Try SHA1
+                if (trimmed.Length == 40 && string.Equals(trimmed, actualSHA1, StringComparison.OrdinalIgnoreCase))
+                {
+                    checksumMatches = true;
+                    matchedHash = actualSHA1;
+                    hashType = "SHA1";
+                    break;
+                }
+            }
 
             if (!checksumMatches)
             {
                 Console.WriteLine($"❌ FAILED");
+
+                // Show both hash types in error
                 string error = $"❌ Checksum Verification Failed: {check.File}\n" +
                               $"   Expected one of: {string.Join(", ", expectedChecksums.Take(2))}\n" +
-                              $"   Actual: {actualChecksum}";
+                              $"   Actual MD5:  {actualMD5}\n" +
+                              $"   Actual SHA1: {actualSHA1}";
 
                 if (!string.IsNullOrEmpty(check.CustomMessage))
                 {
@@ -219,13 +249,16 @@ public class ValidationService
                 Console.WriteLine($"   Expected one of:");
                 foreach (var expected in expectedChecksums.Take(3))
                 {
-                    Console.WriteLine($"     {expected}");
+                    var hashLen = expected.Trim().Length;
+                    var type = hashLen == 32 ? "MD5" : hashLen == 40 ? "SHA1" : "???";
+                    Console.WriteLine($"     {expected} ({type})");
                 }
                 if (expectedChecksums.Count > 3)
                 {
                     Console.WriteLine($"     ... and {expectedChecksums.Count - 3} more");
                 }
-                Console.WriteLine($"   Actual: {actualChecksum}");
+                Console.WriteLine($"   Actual MD5:  {actualMD5}");
+                Console.WriteLine($"   Actual SHA1: {actualSHA1}");
 
                 if (!string.IsNullOrEmpty(check.CustomMessage))
                 {
@@ -235,7 +268,7 @@ public class ValidationService
                 return (false, error);
             }
 
-            Console.WriteLine($"✅ OK ({actualChecksum.Substring(0, 8)}...)");
+            Console.WriteLine($"✅ OK ({hashType}: {matchedHash.Substring(0, 8)}...)");
         }
         else if (!check.Inverted && fileExists)
         {

@@ -23,23 +23,11 @@ jobs:
         dotnet-version: '9.0.x'
 
     - name: Restore dependencies
-      run: |
-        dotnet restore TtwInstallerGui/TtwInstallerGui.csproj
-        dotnet restore TtwInstaller/TtwInstaller.csproj
+      run: dotnet restore TtwInstallerGui/TtwInstallerGui.csproj
 
-    - name: Build GUI
+    - name: Build and Publish
       run: |
         dotnet publish TtwInstallerGui/TtwInstallerGui.csproj \
-          -c Release \
-          -r linux-x64 \
-          --self-contained true \
-          -p:PublishSingleFile=true \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          -p:EnableCompressionInSingleFile=true
-
-    - name: Build CLI
-      run: |
-        dotnet publish TtwInstaller/TtwInstaller.csproj \
           -c Release \
           -r linux-x64 \
           --self-contained true \
@@ -50,22 +38,13 @@ jobs:
     - name: Package release
       run: |
         mkdir -p release
-        # Copy executables
-        cp TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/ttw_linux_gui release/
-        cp TtwInstaller/bin/Release/net9.0/linux-x64/publish/TtwInstaller release/
-
-        # Copy native libraries from source (they're excluded from single-file)
-        cp TtwInstaller/libbsa_capi.so release/
-        cp TtwInstallerGui/xdelta3 release/
-
-        # Copy documentation
-        cp README.md release/
-        cp TtwInstaller/mpi-config.json.example release/
+        # Copy all files from GUI publish directory
+        cp -r TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/* release/
 
         # Make executables executable
         chmod +x release/ttw_linux_gui
-        chmod +x release/TtwInstaller
         chmod +x release/xdelta3
+        chmod +x release/ffmpeg
 
     - name: Create archive
       run: |
@@ -110,12 +89,10 @@ jobs:
           - FFmpeg (install via your package manager)
 
           ### Files Included
-          - `ttw_linux_gui` - GUI application
-          - `TtwInstaller` - CLI tool
-          - `libbsa_capi.so` - BSA library
-          - `xdelta3` - Patching tool
-          - `README.md` - Documentation
-          - `mpi-config.json.example` - Config example
+          - `ttw_linux_gui` - GUI application (single-file)
+          - `libbsa_capi.so` - BSA library (native)
+          - `xdelta3` - Patching tool (native)
+          - Debug symbols (.pdb files)
         draft: false
         prerelease: false
       env:

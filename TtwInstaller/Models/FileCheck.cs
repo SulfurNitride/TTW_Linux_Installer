@@ -26,7 +26,9 @@ public class FileCheck
     public string File { get; set; } = string.Empty;
 
     /// <summary>
-    /// Expected checksums (SHA1, newline-separated)
+    /// Expected checksums (MD5 or SHA1, newline-separated)
+    /// Auto-detected: MD5=32 chars, SHA1=40 chars
+    /// Original TTW installer uses MD5
     /// </summary>
     public string? Checksums { get; set; }
 

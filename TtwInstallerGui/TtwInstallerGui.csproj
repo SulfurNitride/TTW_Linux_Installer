@@ -4,7 +4,6 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AssemblyName>ttw_linux_gui</AssemblyName>
   </PropertyGroup>
@@ -39,6 +38,7 @@
     <ProjectReference Include="..\BsaLib\BsaLib.csproj" />
   </ItemGroup>
 
+  <!-- Bundled binaries -->
   <ItemGroup>
     <Content Include="..\TtwInstaller\libbsa_capi.so">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -46,9 +46,15 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
-    <Content Include="xdelta3">
+    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\xdelta3">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>xdelta3</Link>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\ffmpeg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>ffmpeg</Link>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>

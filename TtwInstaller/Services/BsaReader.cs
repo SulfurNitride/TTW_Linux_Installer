@@ -51,9 +51,18 @@ public class BsaReader : IDisposable
 
     /// <summary>
     /// Extract a file from a BSA archive (uses cached handles for performance)
+    /// On Windows: Uses bsarch.exe (slower but more compatible)
+    /// On Linux: Uses libbsa (faster with caching)
     /// </summary>
     public byte[]? ExtractFile(string bsaPath, string filePath)
     {
+        // Windows: Use bsarch.exe
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return BsarchWrapper.ExtractFile(bsaPath, filePath);
+        }
+
+        // Linux: Use native libbsa
         try
         {
             // Get cached handle (or open and cache if not already open)
@@ -120,6 +129,13 @@ public class BsaReader : IDisposable
     /// </summary>
     public bool FileExists(string bsaPath, string filePath)
     {
+        // Windows: Use bsarch.exe
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return BsarchWrapper.FileExists(bsaPath, filePath);
+        }
+
+        // Linux: Use native libbsa
         try
         {
             if (!File.Exists(bsaPath))

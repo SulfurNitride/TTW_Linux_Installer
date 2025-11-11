@@ -18,6 +18,7 @@ public static class BundledBinaryManager
     public const string XDELTA3_SOURCE = "https://github.com/jmacd/xdelta";
 
     private static string? _xdelta3Path;
+    private static string? _ffmpegPath;
     private static readonly object _lock = new();
 
     /// <summary>
@@ -30,31 +31,28 @@ public static class BundledBinaryManager
             if (_xdelta3Path != null)
                 return _xdelta3Path;
 
-            // Look for xdelta3 next to the executable (same as libbsa_capi.so)
+            // Look for xdelta3 next to the executable
             var appDir = AppContext.BaseDirectory;
             var bundledPath = Path.Combine(appDir, "xdelta3");
 
             if (File.Exists(bundledPath))
             {
-                // Make sure it's executable on Unix
-                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                // Make sure it's executable
+                try
                 {
-                    try
+                    var chmod = new System.Diagnostics.ProcessStartInfo
                     {
-                        var chmod = new System.Diagnostics.ProcessStartInfo
-                        {
-                            FileName = "chmod",
-                            Arguments = $"+x \"{bundledPath}\"",
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true,
-                            UseShellExecute = false,
-                            CreateNoWindow = true
-                        };
-                        using var process = System.Diagnostics.Process.Start(chmod);
-                        process?.WaitForExit(1000);
-                    }
-                    catch { }
+                        FileName = "chmod",
+                        Arguments = $"+x \"{bundledPath}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var process = System.Diagnostics.Process.Start(chmod);
+                    process?.WaitForExit(1000);
                 }
+                catch { }
 
                 _xdelta3Path = bundledPath;
                 return _xdelta3Path;
@@ -65,7 +63,7 @@ public static class BundledBinaryManager
     }
 
     /// <summary>
-    /// Get path to bundled binary for current platform
+    /// Get path to bundled binary for current platform (Linux only)
     /// </summary>
     private static string? GetBundledBinaryPath(string binaryName)
     {
@@ -75,30 +73,9 @@ public static class BundledBinaryManager
             var appDir = AppContext.BaseDirectory;
 
             // Determine platform subdirectory
-            string platformDir;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                platformDir = RuntimeInformation.ProcessArchitecture == Architecture.X64
-                    ? "win-x64"
-                    : "win-x86";
-                binaryName += ".exe";
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            {
-                platformDir = RuntimeInformation.ProcessArchitecture == Architecture.X64
-                    ? "linux-x64"
-                    : "linux-arm64";
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                platformDir = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
-                    ? "osx-arm64"
-                    : "osx-x64";
-            }
-            else
-            {
-                return null;
-            }
+            string platformDir = RuntimeInformation.ProcessArchitecture == Architecture.X64
+                ? "linux-x64"
+                : "linux-arm64";
 
             var bundledPath = Path.Combine(appDir, "BundledBinaries", platformDir, binaryName);
             return File.Exists(bundledPath) ? bundledPath : null;
@@ -116,11 +93,9 @@ public static class BundledBinaryManager
     {
         try
         {
-            var searchCommand = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "where" : "which";
-
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
-                FileName = searchCommand,
+                FileName = "which",
                 Arguments = binaryName,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -159,5 +134,72 @@ public static class BundledBinaryManager
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Get path to ffmpeg binary (bundled or system)
+    /// Tries bundled version first, falls back to system PATH
+    /// </summary>
+    public static string GetFfmpegPath()
+    {
+        lock (_lock)
+        {
+            if (_ffmpegPath != null)
+                return _ffmpegPath;
+
+            // Try bundled version first
+            var appDir = AppContext.BaseDirectory;
+            var bundledPath = Path.Combine(appDir, "ffmpeg");
+
+            if (File.Exists(bundledPath))
+            {
+                // Make executable
+                try
+                {
+                    var chmod = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "chmod",
+                        Arguments = $"+x \"{bundledPath}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var process = System.Diagnostics.Process.Start(chmod);
+                    process?.WaitForExit(1000);
+                }
+                catch { }
+
+                _ffmpegPath = bundledPath;
+                return _ffmpegPath;
+            }
+
+            // Fall back to system ffmpeg
+            var systemPath = FindSystemBinary("ffmpeg");
+            if (systemPath != null)
+            {
+                _ffmpegPath = systemPath;
+                return _ffmpegPath;
+            }
+
+            // Return "ffmpeg" as last resort - will fail at runtime but allows dependency checking
+            return "ffmpeg";
+        }
+    }
+
+    /// <summary>
+    /// Check if ffmpeg is available (bundled or system)
+    /// </summary>
+    public static bool IsFfmpegAvailable()
+    {
+        var path = GetFfmpegPath();
+
+        // If it's just "ffmpeg" without a path, check if it's in PATH
+        if (path == "ffmpeg")
+        {
+            return FindSystemBinary("ffmpeg") != null;
+        }
+
+        return File.Exists(path);
     }
 }
