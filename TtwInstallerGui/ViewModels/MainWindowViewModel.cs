@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -20,6 +21,12 @@ public partial class MainWindowViewModel : ObservableObject
     // Universal MPI Installer Properties
     [ObservableProperty]
     private string _universalMpiPath = "";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _availableMpiFiles = new();
+
+    [ObservableProperty]
+    private string? _selectedMpiFile;
 
     [ObservableProperty]
     private string _universalFo3Path = "";
@@ -80,16 +87,65 @@ public partial class MainWindowViewModel : ObservableObject
 
     private Window? _mainWindow;
     private UserConfig _userConfig = new UserConfig();
+    private bool _dependenciesAvailable = false;
 
     public MainWindowViewModel()
     {
         // Load saved user config
         LoadConfig();
+
+        // Auto-select MPI file if there's exactly one in the current directory
+        AutoSelectSingleMpiFile();
     }
 
     public void SetMainWindow(Window window)
     {
         _mainWindow = window;
+
+        // Run startup dependency checks
+        Task.Run(() => RunStartupChecks());
+    }
+
+    private async Task RunStartupChecks()
+    {
+        // Run dependency checks on startup
+        await Task.Delay(100); // Small delay to let UI load
+
+        AppendUniversalLog("=== Startup Dependency Check ===");
+        var (success, missingDeps) = DependencyChecker.CheckDependencies(AppendUniversalLog);
+        AppendUniversalLog("");
+
+        if (!success)
+        {
+            _dependenciesAvailable = false;
+
+            // Show prominent error in log
+            AppendUniversalLog("");
+            AppendUniversalLog("********************************************************");
+            AppendUniversalLog("*                                                      *");
+            AppendUniversalLog("*        ❌ APPLICATION STARTUP FAILED ❌             *");
+            AppendUniversalLog("*                                                      *");
+            AppendUniversalLog("********************************************************");
+            AppendUniversalLog("");
+            AppendUniversalLog("  Required bundled binaries are missing!");
+            AppendUniversalLog($"  Missing: {string.Join(", ", missingDeps)}");
+            AppendUniversalLog("");
+            AppendUniversalLog("  Please reinstall the application or verify all");
+            AppendUniversalLog("  files were extracted correctly.");
+            AppendUniversalLog("");
+            AppendUniversalLog("  Installation cannot proceed until this is resolved.");
+            AppendUniversalLog("");
+            AppendUniversalLog("********************************************************");
+            AppendUniversalLog("");
+
+            UniversalMpiInfo = "❌ Dependency check failed - see log for details";
+            UniversalProgressText = "❌ DEPENDENCY CHECK FAILED";
+        }
+        else
+        {
+            _dependenciesAvailable = true;
+            AppendUniversalLog("Ready to install MPI packages.");
+        }
     }
 
     private void LoadConfig()
@@ -131,6 +187,61 @@ public partial class MainWindowViewModel : ObservableObject
     partial void OnUniversalOutputPathChanged(string value) => SaveConfig();
     partial void OnUniversalMpiPathChanged(string value) => SaveConfig();
     partial void OnUniversalCreateBsasChanged(bool value) => SaveConfig();
+
+    // Handle dropdown selection
+    partial void OnSelectedMpiFileChanged(string? value)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            UniversalMpiPath = value;
+            Task.Run(async () => await ParseUniversalMpi()).ConfigureAwait(false);
+        }
+    }
+
+    private void AutoSelectSingleMpiFile()
+    {
+        try
+        {
+            // Get the current directory (where the executable is running)
+            var currentDirectory = Directory.GetCurrentDirectory();
+
+            // Find all .mpi files in the current directory (not subdirectories)
+            var mpiFiles = Directory.GetFiles(currentDirectory, "*.mpi", SearchOption.TopDirectoryOnly);
+
+            // Populate the dropdown with found MPI files
+            AvailableMpiFiles.Clear();
+            foreach (var mpiFile in mpiFiles)
+            {
+                AvailableMpiFiles.Add(mpiFile);
+            }
+
+            if (mpiFiles.Length == 1)
+            {
+                // Exactly one .mpi file - auto-select it
+                SelectedMpiFile = mpiFiles[0];
+                AppendUniversalLog($"Auto-selected MPI: {Path.GetFileName(mpiFiles[0])}");
+                AppendUniversalLog("");
+            }
+            else if (mpiFiles.Length > 1)
+            {
+                // Multiple .mpi files found - dropdown will show them
+                AppendUniversalLog($"Found {mpiFiles.Length} MPI files in current directory.");
+                AppendUniversalLog("Please select one from the dropdown or use 'Browse' to choose another.");
+                AppendUniversalLog("");
+            }
+            else
+            {
+                // No .mpi files found
+                AppendUniversalLog("No MPI files found in current directory.");
+                AppendUniversalLog("Please use the 'Browse MPI' button to select an MPI package.");
+                AppendUniversalLog("");
+            }
+        }
+        catch
+        {
+            // Silently ignore errors - this is a convenience feature
+        }
+    }
 
     // ========== Universal MPI Installer Methods ==========
 
@@ -315,6 +426,14 @@ public partial class MainWindowViewModel : ObservableObject
     private async Task StartUniversalInstall()
     {
         if (IsInstalling) return;
+
+        // Check dependencies first
+        if (!_dependenciesAvailable)
+        {
+            AppendUniversalLog("❌ Error: Cannot start installation - required dependencies are missing!");
+            AppendUniversalLog("   Please check the startup error message above and reinstall the application.");
+            return;
+        }
 
         // Validate
         if (_universalCachedManifest == null)

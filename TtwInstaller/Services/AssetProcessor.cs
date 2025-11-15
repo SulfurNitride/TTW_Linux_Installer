@@ -225,7 +225,7 @@ public class AssetProcessor
                     {
                         StartInfo = new System.Diagnostics.ProcessStartInfo
                         {
-                            FileName = "lz4",
+                            FileName = BundledBinaryManager.GetLz4Path(),
                             Arguments = $"-d -f \"{patchFile}\" \"{tempDecompressedPatch}\"",
                             RedirectStandardOutput = true,
                             RedirectStandardError = true,

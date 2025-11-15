@@ -3,11 +3,13 @@ using System.Runtime.InteropServices;
 namespace TtwInstaller.Services;
 
 /// <summary>
-/// Manages bundled native binaries (xdelta3, ffmpeg, etc.)
+/// Manages bundled native binaries (xdelta3, ffmpeg, lz4, etc.)
 ///
 /// Version Tracking:
 /// - xdelta3: v3.1.0 (https://github.com/jmacd/xdelta)
 ///   SHA1 (linux-x64): b64031ee8450f148a52bc10ff82e46bdee245ea2
+/// - lz4: v1.10.0 (https://github.com/lz4/lz4)
+///   Statically compiled with multithreading support
 ///
 /// See BUNDLED_BINARIES.md for full details on versions and sources.
 /// </summary>
@@ -16,9 +18,12 @@ public static class BundledBinaryManager
     // Bundled binary versions - update when binaries are updated
     public const string XDELTA3_VERSION = "3.1.0";
     public const string XDELTA3_SOURCE = "https://github.com/jmacd/xdelta";
+    public const string LZ4_VERSION = "1.10.0";
+    public const string LZ4_SOURCE = "https://github.com/lz4/lz4";
 
     private static string? _xdelta3Path;
     private static string? _ffmpegPath;
+    private static string? _lz4Path;
     private static readonly object _lock = new();
 
     /// <summary>
@@ -198,6 +203,73 @@ public static class BundledBinaryManager
         if (path == "ffmpeg")
         {
             return FindSystemBinary("ffmpeg") != null;
+        }
+
+        return File.Exists(path);
+    }
+
+    /// <summary>
+    /// Get path to lz4 binary (bundled or system)
+    /// Tries bundled version first, falls back to system PATH
+    /// </summary>
+    public static string GetLz4Path()
+    {
+        lock (_lock)
+        {
+            if (_lz4Path != null)
+                return _lz4Path;
+
+            // Try bundled version first
+            var appDir = AppContext.BaseDirectory;
+            var bundledPath = Path.Combine(appDir, "lz4");
+
+            if (File.Exists(bundledPath))
+            {
+                // Make executable
+                try
+                {
+                    var chmod = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "chmod",
+                        Arguments = $"+x \"{bundledPath}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var process = System.Diagnostics.Process.Start(chmod);
+                    process?.WaitForExit(1000);
+                }
+                catch { }
+
+                _lz4Path = bundledPath;
+                return _lz4Path;
+            }
+
+            // Fall back to system lz4
+            var systemPath = FindSystemBinary("lz4");
+            if (systemPath != null)
+            {
+                _lz4Path = systemPath;
+                return _lz4Path;
+            }
+
+            // Return "lz4" as last resort - will fail at runtime but allows dependency checking
+            return "lz4";
+        }
+    }
+
+    /// <summary>
+    /// Check if lz4 is available (bundled or system)
+    /// </summary>
+    public static bool IsLz4Available()
+    {
+        var path = GetLz4Path();
+
+        // If it's just "lz4" without a path, check if it's in PATH
+        if (path == "lz4")
+        {
+            return FindSystemBinary("lz4") != null;
         }
 
         return File.Exists(path);

@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:TtwInstallerGui.ViewModels"
+        xmlns:views="using:TtwInstallerGui.Views"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="750"
@@ -32,11 +33,27 @@
         </DockPanel>
 
         <!-- MPI File Selection -->
-        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,20">
-            <TextBlock DockPanel.Dock="Left" Text="MPI Package:" Width="120" VerticalAlignment="Center"/>
-            <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding UniversalBrowseMpiCommand}"/>
-            <TextBox Text="{Binding UniversalMpiPath}" IsReadOnly="False" Watermark="Select an MPI file (.mpi)"/>
-        </DockPanel>
+        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,20">
+            <!-- Dropdown for found MPI files -->
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="MPI Package:" Width="120" VerticalAlignment="Center"/>
+                <Button DockPanel.Dock="Right" Content="Browse..." Width="100" Margin="10,0,0,0" Command="{Binding UniversalBrowseMpiCommand}"/>
+                <ComboBox ItemsSource="{Binding AvailableMpiFiles}"
+                          SelectedItem="{Binding SelectedMpiFile}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Converter={x:Static views:FileNameConverter.Instance}}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </DockPanel>
+
+            <!-- Path display (read-only) -->
+            <TextBox Text="{Binding UniversalMpiPath}"
+                     IsReadOnly="True"
+                     Watermark="Select an MPI file from the dropdown or browse"
+                     Margin="120,0,0,0"/>
+        </StackPanel>
 
         <!-- MPI Info Display -->
         <Border DockPanel.Dock="Top" BorderBrush="Gray" BorderThickness="1" Padding="10" Margin="0,0,0,20">
