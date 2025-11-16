@@ -16,7 +16,7 @@ Where to get MPI files?
 
 **OBLIVION BSA DECOMPRESSOR:** https://www.nexusmods.com/oblivion/mods/49652
 
-**Requirements:** FFMPEG I literally think this is the only thing you need.
+**Requirements:** LZ4 is required, if you do not have this it will not function correctly.
 
 ## Performance Note
 
