@@ -174,7 +174,14 @@ public class ValidationService
         }
 
         string basePath = _locationResolver.GetDirectoryPath(check.Loc);
-        string filePath = Path.Combine(basePath, check.File);
+
+        // Normalize path separators and resolve relative paths (..)
+        string normalizedFile = check.File.Replace('\\', Path.DirectorySeparatorChar);
+        string filePath = Path.Combine(basePath, normalizedFile);
+
+        // Normalize the path to resolve .. and other relative components
+        filePath = Path.GetFullPath(filePath);
+
         bool fileExists = File.Exists(filePath);
         bool checkResult = check.Inverted ? !fileExists : fileExists;
 

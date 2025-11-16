@@ -100,7 +100,6 @@ package_release() {
     # Make executables executable
     chmod +x "$OUTPUT_DIR/ttw_linux_gui"
     chmod +x "$OUTPUT_DIR/xdelta3"
-    chmod +x "$OUTPUT_DIR/lz4"
     chmod +x "$OUTPUT_DIR/ffmpeg"
 
     print_success "Release packaged in $OUTPUT_DIR/"

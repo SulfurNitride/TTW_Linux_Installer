@@ -129,16 +129,39 @@ public class BsaWriter : IDisposable
     /// </summary>
     public int WriteAllBsas()
     {
-        Console.WriteLine($"\n=== Writing {_bsaArchives.Count} BSA Archives ===\n");
+        // Filter out empty BSAs
+        var nonEmptyBsas = _bsaArchives.Where(x => x.Value.FileCount > 0).ToList();
+        var emptyBsas = _bsaArchives.Where(x => x.Value.FileCount == 0).ToList();
+
+        if (emptyBsas.Count > 0)
+        {
+            Console.WriteLine($"\n⚠️  Skipping {emptyBsas.Count} empty BSA(s):");
+            foreach (var (_, bsa) in emptyBsas.Take(5))
+            {
+                Console.WriteLine($"    - {bsa.Name}");
+            }
+            if (emptyBsas.Count > 5)
+            {
+                Console.WriteLine($"    ... and {emptyBsas.Count - 5} more");
+            }
+        }
+
+        if (nonEmptyBsas.Count == 0)
+        {
+            Console.WriteLine("\n⚠️  No BSA files to create (all are empty)");
+            return 0;
+        }
+
+        Console.WriteLine($"\n=== Writing {nonEmptyBsas.Count} BSA Archives ===\n");
 
         int successCount = 0;
         int failCount = 0;
 
-        foreach (var (locationIndex, bsa) in _bsaArchives.OrderBy(x => x.Key))
+        foreach (var (locationIndex, bsa) in nonEmptyBsas.OrderBy(x => x.Key))
         {
             try
             {
-                Console.Write($"  [{successCount + failCount + 1}/{_bsaArchives.Count}] {bsa.Name} ({bsa.FileCount} files) ... ");
+                Console.Write($"  [{successCount + failCount + 1}/{nonEmptyBsas.Count}] {bsa.Name} ({bsa.FileCount} files) ... ");
 
                 if (WriteBsa(bsa))
                 {
@@ -158,7 +181,7 @@ public class BsaWriter : IDisposable
             }
         }
 
-        Console.WriteLine($"\nBSA Creation: {successCount}/{_bsaArchives.Count} succeeded, {failCount} failed");
+        Console.WriteLine($"\nBSA Creation: {successCount}/{nonEmptyBsas.Count} succeeded, {failCount} failed");
 
         // Report collisions
         ReportCollisions();

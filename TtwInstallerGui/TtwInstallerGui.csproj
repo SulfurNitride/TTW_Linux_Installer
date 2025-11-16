@@ -13,6 +13,8 @@
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>
@@ -55,12 +57,6 @@
     <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\ffmpeg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>ffmpeg</Link>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
-    </Content>
-    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\lz4">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>lz4</Link>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
