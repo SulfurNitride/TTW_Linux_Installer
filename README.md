@@ -2,8 +2,6 @@
 
 This is a side project of mine. It's a linux native installer for MPI packages (TTW, BSA Decompressors, etc.). As of right now there might be issues, but in my testing it seems to work just fine. My testing was me loading it on The Badlands modlist with TTW.
 
-**NEW:** Now works as a universal MPI installer! It auto-detects which game paths you need based on the MPI file you select.
-
 To run it all you need to do is either double click it and allow executing. Or `chmod +x ttw_linux_gui`.
 
 Not sure how much I'm going to update this I just wanted to share it.
