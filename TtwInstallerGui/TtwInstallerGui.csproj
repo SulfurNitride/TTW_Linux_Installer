@@ -48,9 +48,21 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
-    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\**">
-      <Link>BundledBinaries\linux-x64\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\xdelta3">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>xdelta3</Link>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\ffmpeg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>ffmpeg</Link>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+    <Content Include="..\TtwInstaller\BundledBinaries\linux-x64\lz4">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>lz4</Link>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>

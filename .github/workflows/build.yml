@@ -44,15 +44,11 @@ jobs:
         # Copy all files from GUI publish directory
         cp -r TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/* release/
 
-        # Manually copy BundledBinaries to ensure they are present
-        mkdir -p release/BundledBinaries/linux-x64
-        cp TtwInstaller/BundledBinaries/linux-x64/* release/BundledBinaries/linux-x64/
-
         # Make executables executable
         chmod +x release/ttw_linux_gui
-        chmod +x release/BundledBinaries/linux-x64/xdelta3
-        chmod +x release/BundledBinaries/linux-x64/ffmpeg
-        chmod +x release/BundledBinaries/linux-x64/lz4
+        chmod +x release/xdelta3
+        chmod +x release/ffmpeg
+        chmod +x release/lz4
 
     - name: Create archive
       run: |
