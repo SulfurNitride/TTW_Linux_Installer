@@ -46,9 +46,9 @@ jobs:
 
         # Make executables executable
         chmod +x release/ttw_linux_gui
-        chmod +x release/xdelta3
-        chmod +x release/ffmpeg
-        chmod +x release/lz4
+        chmod +x release/BundledBinaries/linux-x64/xdelta3
+        chmod +x release/BundledBinaries/linux-x64/ffmpeg
+        chmod +x release/BundledBinaries/linux-x64/lz4
 
     - name: Create archive
       run: |
