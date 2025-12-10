@@ -34,35 +34,150 @@ public static class BundledBinaryManager
             if (_xdelta3Path != null)
                 return _xdelta3Path;
 
-            // Look for xdelta3 next to the executable
+            // 1. Try flattened path (release/single-file)
             var appDir = AppContext.BaseDirectory;
-            var bundledPath = Path.Combine(appDir, "xdelta3");
-
-            if (File.Exists(bundledPath))
+            var flattenedPath = Path.Combine(appDir, "xdelta3");
+            if (File.Exists(flattenedPath))
             {
-                // Make sure it's executable
-                try
-                {
-                    var chmod = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "chmod",
-                        Arguments = $"+x \"{bundledPath}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-                    using var process = System.Diagnostics.Process.Start(chmod);
-                    process?.WaitForExit(1000);
-                }
-                catch { }
-
-                _xdelta3Path = bundledPath;
+                MakeExecutable(flattenedPath);
+                _xdelta3Path = flattenedPath;
                 return _xdelta3Path;
             }
 
-            throw new FileNotFoundException($"Bundled xdelta3 not found at expected path: {bundledPath}");
+            // 2. Try structured path (dev/cli)
+            var structuredPath = GetBundledBinaryPath("xdelta3");
+            if (structuredPath != null)
+            {
+                MakeExecutable(structuredPath);
+                _xdelta3Path = structuredPath;
+                return _xdelta3Path;
+            }
+
+            throw new FileNotFoundException($"Bundled xdelta3 not found at expected path: {flattenedPath}");
         }
+    }
+
+    /// <summary>
+    /// Get path to ffmpeg binary (bundled or system)
+    /// Tries bundled version first, falls back to system PATH
+    /// </summary>
+    public static string GetFfmpegPath()
+    {
+        lock (_lock)
+        {
+            if (_ffmpegPath != null)
+                return _ffmpegPath;
+
+            // 1. Try flattened path (release/single-file)
+            var appDir = AppContext.BaseDirectory;
+            var flattenedPath = Path.Combine(appDir, "ffmpeg");
+            if (File.Exists(flattenedPath))
+            {
+                MakeExecutable(flattenedPath);
+                _ffmpegPath = flattenedPath;
+                return _ffmpegPath;
+            }
+
+            // 2. Try structured path (dev/cli)
+            var structuredPath = GetBundledBinaryPath("ffmpeg");
+            if (structuredPath != null)
+            {
+                MakeExecutable(structuredPath);
+                _ffmpegPath = structuredPath;
+                return _ffmpegPath;
+            }
+
+            // 3. Fall back to system ffmpeg
+            var systemPath = FindSystemBinary("ffmpeg");
+            if (systemPath != null)
+            {
+                _ffmpegPath = systemPath;
+                return _ffmpegPath;
+            }
+
+            // Return "ffmpeg" as last resort
+            return "ffmpeg";
+        }
+    }
+
+    /// <summary>
+    /// Get path to lz4 binary (bundled or system)
+    /// </summary>
+    public static string GetLz4Path()
+    {
+        lock (_lock)
+        {
+            if (_lz4Path != null)
+                return _lz4Path;
+
+            // 1. Try flattened path (release/single-file)
+            var appDir = AppContext.BaseDirectory;
+            var flattenedPath = Path.Combine(appDir, "lz4");
+            if (File.Exists(flattenedPath))
+            {
+                MakeExecutable(flattenedPath);
+                _lz4Path = flattenedPath;
+                return _lz4Path;
+            }
+
+            // 2. Try structured path (dev/cli)
+            var structuredPath = GetBundledBinaryPath("lz4");
+            if (structuredPath != null)
+            {
+                MakeExecutable(structuredPath);
+                _lz4Path = structuredPath;
+                return _lz4Path;
+            }
+
+            // 3. Fall back to system lz4
+            var systemPath = FindSystemBinary("lz4");
+            if (systemPath != null)
+            {
+                _lz4Path = systemPath;
+                return _lz4Path;
+            }
+
+            // Return "lz4" as last resort
+            return "lz4";
+        }
+    }
+
+    /// <summary>
+    /// Check if xdelta3 is available (bundled or system)
+    /// </summary>
+    public static bool IsXdelta3Available()
+    {
+        try
+        {
+            GetXdelta3Path();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Check if ffmpeg is available (bundled or system)
+    /// </summary>
+    public static bool IsFfmpegAvailable()
+    {
+        var path = GetFfmpegPath();
+        if (path == "ffmpeg")
+            return FindSystemBinary("ffmpeg") != null;
+        return File.Exists(path);
+    }
+
+    /// <summary>
+    /// Check if lz4 is available (bundled or system)
+    /// </summary>
+    public static bool IsLz4Available()
+    {
+        var path = GetLz4Path();
+        if (path == "lz4")
+            return FindSystemBinary("lz4") != null;
+        return File.Exists(path);
     }
 
     /// <summary>
@@ -72,10 +187,7 @@ public static class BundledBinaryManager
     {
         try
         {
-            // Get the directory where the executable is located
             var appDir = AppContext.BaseDirectory;
-
-            // Determine platform subdirectory
             string platformDir = RuntimeInformation.ProcessArchitecture == Architecture.X64
                 ? "linux-x64"
                 : "linux-arm64";
@@ -114,7 +226,6 @@ public static class BundledBinaryManager
 
             if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
             {
-                // Take first line if multiple results
                 return output.Split('\n')[0].Trim();
             }
         }
@@ -124,151 +235,24 @@ public static class BundledBinaryManager
     }
 
     /// <summary>
-    /// Check if xdelta3 is available (bundled or system)
+    /// Ensure a file is executable (chmod +x)
     /// </summary>
-    public static bool IsXdelta3Available()
+    private static void MakeExecutable(string path)
     {
         try
         {
-            GetXdelta3Path();
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Get path to ffmpeg binary (bundled or system)
-    /// Tries bundled version first, falls back to system PATH
-    /// </summary>
-    public static string GetFfmpegPath()
-    {
-        lock (_lock)
-        {
-            if (_ffmpegPath != null)
-                return _ffmpegPath;
-
-            // Try bundled version first
-            var appDir = AppContext.BaseDirectory;
-            var bundledPath = Path.Combine(appDir, "ffmpeg");
-
-            if (File.Exists(bundledPath))
+            var chmod = new System.Diagnostics.ProcessStartInfo
             {
-                // Make executable
-                try
-                {
-                    var chmod = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "chmod",
-                        Arguments = $"+x \"{bundledPath}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-                    using var process = System.Diagnostics.Process.Start(chmod);
-                    process?.WaitForExit(1000);
-                }
-                catch { }
-
-                _ffmpegPath = bundledPath;
-                return _ffmpegPath;
-            }
-
-            // Fall back to system ffmpeg
-            var systemPath = FindSystemBinary("ffmpeg");
-            if (systemPath != null)
-            {
-                _ffmpegPath = systemPath;
-                return _ffmpegPath;
-            }
-
-            // Return "ffmpeg" as last resort - will fail at runtime but allows dependency checking
-            return "ffmpeg";
+                FileName = "chmod",
+                Arguments = $"+x \"{path}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = System.Diagnostics.Process.Start(chmod);
+            process?.WaitForExit(1000);
         }
-    }
-
-    /// <summary>
-    /// Check if ffmpeg is available (bundled or system)
-    /// </summary>
-    public static bool IsFfmpegAvailable()
-    {
-        var path = GetFfmpegPath();
-
-        // If it's just "ffmpeg" without a path, check if it's in PATH
-        if (path == "ffmpeg")
-        {
-            return FindSystemBinary("ffmpeg") != null;
-        }
-
-        return File.Exists(path);
-    }
-
-    /// <summary>
-    /// Get path to lz4 binary (bundled or system)
-    /// </summary>
-    public static string GetLz4Path()
-    {
-        lock (_lock)
-        {
-            if (_lz4Path != null)
-                return _lz4Path;
-
-            // Try bundled version first
-            var appDir = AppContext.BaseDirectory;
-            var bundledPath = Path.Combine(appDir, "lz4");
-
-            if (File.Exists(bundledPath))
-            {
-                // Make executable
-                try
-                {
-                    var chmod = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "chmod",
-                        Arguments = $"+x \"{bundledPath}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-                    using var process = System.Diagnostics.Process.Start(chmod);
-                    process?.WaitForExit(1000);
-                }
-                catch { }
-
-                _lz4Path = bundledPath;
-                return _lz4Path;
-            }
-
-            // Fall back to system lz4
-            var systemPath = FindSystemBinary("lz4");
-            if (systemPath != null)
-            {
-                _lz4Path = systemPath;
-                return _lz4Path;
-            }
-
-            // Return "lz4" as last resort - will fail at runtime but allows dependency checking
-            return "lz4";
-        }
-    }
-
-    /// <summary>
-    /// Check if lz4 is available (bundled or system)
-    /// </summary>
-    public static bool IsLz4Available()
-    {
-        var path = GetLz4Path();
-
-        // If it's just "lz4" without a path, check if it's in PATH
-        if (path == "lz4")
-        {
-            return FindSystemBinary("lz4") != null;
-        }
-
-        return File.Exists(path);
+        catch { }
     }
 }
