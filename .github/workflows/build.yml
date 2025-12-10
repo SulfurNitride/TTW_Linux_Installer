@@ -45,6 +45,7 @@ jobs:
         chmod +x release/ttw_linux_gui
         chmod +x release/xdelta3
         chmod +x release/ffmpeg
+        chmod +x release/lz4
 
     - name: Create archive
       run: |

@@ -102,3 +102,22 @@ Should output version information and list of enabled codecs.
 - Static build with no external dependencies
 - Users can still use system ffmpeg if preferred (installer will detect and use it)
 - Large file size is due to including all codecs and formats
+
+## lz4
+
+- **Version:** v1.9.4
+- **Source:** https://github.com/lz4/lz4
+- **License:** BSD 2-Clause
+- **Purpose:** Decompression of LZ4-compressed patch files
+
+### Platform Binaries
+
+#### Linux (x86_64)
+- **Location:** `TtwInstaller/BundledBinaries/linux-x64/lz4`
+- **Build Info:** Static build
+- **Download:** Built via GitHub Actions
+
+### Notes
+
+- lz4 is bundled to ensure consistent decompression behavior
+- Statically linked for portability

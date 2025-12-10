@@ -14,7 +14,7 @@ Where to get MPI files?
 
 **OBLIVION BSA DECOMPRESSOR:** https://www.nexusmods.com/oblivion/mods/49652
 
-**Requirements:** LZ4 is required, if you do not have this it will not function correctly.
+**Requirements:** None! (Everything is bundled)
 
 ## Performance Note
 

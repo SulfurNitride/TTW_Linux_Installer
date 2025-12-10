@@ -3,15 +3,13 @@ using System.Runtime.InteropServices;
 namespace TtwInstaller.Services;
 
 /// <summary>
-/// Manages bundled native binaries (xdelta3, ffmpeg) and system binaries (lz4)
+/// Manages bundled native binaries (xdelta3, ffmpeg, lz4)
 ///
 /// Bundled binaries (shipped with application):
 /// - xdelta3: v3.1.0 (https://github.com/jmacd/xdelta)
 ///   SHA1 (linux-x64): b64031ee8450f148a52bc10ff82e46bdee245ea2
 /// - ffmpeg: Bundled with application
-///
-/// System binaries (must be installed separately):
-/// - lz4: Expected to be available in system PATH (install via package manager)
+/// - lz4: Bundled with application
 ///
 /// See BUNDLED_BINARIES.md for full details on versions and sources.
 /// </summary>
@@ -209,7 +207,7 @@ public static class BundledBinaryManager
     }
 
     /// <summary>
-    /// Get path to lz4 binary (system only - not bundled)
+    /// Get path to lz4 binary (bundled or system)
     /// </summary>
     public static string GetLz4Path()
     {
@@ -218,7 +216,34 @@ public static class BundledBinaryManager
             if (_lz4Path != null)
                 return _lz4Path;
 
-            // Use system lz4 only
+            // Try bundled version first
+            var appDir = AppContext.BaseDirectory;
+            var bundledPath = Path.Combine(appDir, "lz4");
+
+            if (File.Exists(bundledPath))
+            {
+                // Make executable
+                try
+                {
+                    var chmod = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "chmod",
+                        Arguments = $"+x \"{bundledPath}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var process = System.Diagnostics.Process.Start(chmod);
+                    process?.WaitForExit(1000);
+                }
+                catch { }
+
+                _lz4Path = bundledPath;
+                return _lz4Path;
+            }
+
+            // Fall back to system lz4
             var systemPath = FindSystemBinary("lz4");
             if (systemPath != null)
             {

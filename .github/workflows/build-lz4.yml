@@ -1,0 +1,39 @@
+name: Build LZ4 Static
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-lz4.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        repository: lz4/lz4
+        ref: v1.9.4
+
+    - name: Build LZ4 Static
+      run: |
+        # Build lz4 static executable
+        # lz4's Makefile supports standard variables
+        make clean
+        make lz4 CFLAGS="-O3 -static" LDFLAGS="-static"
+        
+        # Verify it's static
+        file lz4
+        ldd lz4 || echo "Not a dynamic executable"
+        
+        # Test it works
+        ./lz4 --version
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: lz4-linux-x64
+        path: lz4
+        retention-days: 90

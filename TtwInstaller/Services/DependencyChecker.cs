@@ -25,8 +25,8 @@ public static class DependencyChecker
             missing.Add("ffmpeg");
         }
 
-        // Check lz4 (system only - not bundled)
-        if (!CheckSystemBinary("lz4", BundledBinaryManager.GetLz4Path, BundledBinaryManager.IsLz4Available, log))
+        // Check lz4 (bundled only)
+        if (!CheckBundledBinary("lz4", BundledBinaryManager.GetLz4Path, log))
         {
             missing.Add("lz4");
         }
@@ -38,20 +38,12 @@ public static class DependencyChecker
             log("");
 
             // Categorize missing dependencies
-            var bundledMissing = missing.Where(d => d != "lz4").ToList();
-            var systemMissing = missing.Where(d => d == "lz4").ToList();
-
+            var bundledMissing = missing;
+            
             if (bundledMissing.Count > 0)
             {
                 log("   Bundled binaries missing (reinstall required):");
                 foreach (var dep in bundledMissing)
-                    log($"     - {dep}");
-            }
-
-            if (systemMissing.Count > 0)
-            {
-                log("   System dependencies missing (install via package manager):");
-                foreach (var dep in systemMissing)
                     log($"     - {dep}");
             }
 
