@@ -47,6 +47,9 @@ jobs:
         # Manually copy binaries to root of release to guarantee they exist
         cp TtwInstaller/BundledBinaries/linux-x64/* release/
 
+        # Remove the BundledBinaries folder if it somehow got copied
+        rm -rf release/BundledBinaries
+
         # Make executables executable
         chmod +x release/ttw_linux_gui
         chmod +x release/xdelta3
