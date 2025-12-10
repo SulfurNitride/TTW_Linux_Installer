@@ -35,6 +35,9 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true \
           -p:EnableCompressionInSingleFile=true
 
+    - name: Debug Publish Directory
+      run: ls -R TtwInstallerGui/bin/Release/net9.0/linux-x64/publish/
+
     - name: Package release
       run: |
         mkdir -p release

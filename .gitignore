@@ -18,6 +18,7 @@ obj/
 # Except bundled binaries (needed for distribution)
 !TtwInstaller/BundledBinaries/**/xdelta3
 !TtwInstaller/BundledBinaries/**/ffmpeg
+!TtwInstaller/BundledBinaries/**/lz4
 
 # .NET Core
 project.lock.json
