@@ -17,7 +17,7 @@ public class InstallationLogger
         lock (_lock)
         {
             _errors.Add(message);
-            Console.WriteLine($"❌ ERROR: {message}");
+            Console.WriteLine($"ERROR: {message}");
         }
     }
 
@@ -26,7 +26,7 @@ public class InstallationLogger
         lock (_lock)
         {
             _warnings.Add(message);
-            Console.WriteLine($"⚠️  WARNING: {message}");
+            Console.WriteLine($"WARNING: {message}");
         }
     }
 
@@ -38,7 +38,7 @@ public class InstallationLogger
                 ? filePath
                 : $"{filePath} - {reason}";
             _missingFiles.Add(msg);
-            Console.WriteLine($"⚠️  Missing file: {msg}");
+            Console.WriteLine($"Missing file: {msg}");
         }
     }
 
@@ -63,7 +63,7 @@ public class InstallationLogger
 
         if (_errors.Count > 0)
         {
-            sb.AppendLine($"❌ ERRORS ({_errors.Count}):");
+            sb.AppendLine($"ERRORS ({_errors.Count}):");
             foreach (var error in _errors)
             {
                 sb.AppendLine($"   • {error}");
@@ -73,7 +73,7 @@ public class InstallationLogger
 
         if (_warnings.Count > 0)
         {
-            sb.AppendLine($"⚠️  WARNINGS ({_warnings.Count}):");
+            sb.AppendLine($"WARNINGS ({_warnings.Count}):");
             foreach (var warning in _warnings)
             {
                 sb.AppendLine($"   • {warning}");
@@ -83,7 +83,7 @@ public class InstallationLogger
 
         if (_missingFiles.Count > 0)
         {
-            sb.AppendLine($"📁 MISSING FILES ({_missingFiles.Count}):");
+            sb.AppendLine($"MISSING FILES ({_missingFiles.Count}):");
             int displayCount = Math.Min(_missingFiles.Count, 20);
             foreach (var file in _missingFiles.Take(displayCount))
             {
@@ -153,11 +153,11 @@ public class InstallationLogger
             }
 
             File.WriteAllText(logPath, sb.ToString());
-            Console.WriteLine($"\n📝 Detailed log written to: {logPath}");
+            Console.WriteLine($"\nDetailed log written to: {logPath}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"⚠️  Failed to write log file: {ex.Message}");
+            Console.WriteLine($"Failed to write log file: {ex.Message}");
         }
     }
 }

@@ -78,6 +78,53 @@ public class BsaWriter : IDisposable
     }
 
     /// <summary>
+    /// Add a file to a BSA collection from disk (efficient copy)
+    /// </summary>
+    public void AddFileFromPath(int locationIndex, string targetFilePath, string sourceFilePath)
+    {
+        if (!_bsaArchives.TryGetValue(locationIndex, out var bsa))
+        {
+            throw new InvalidOperationException($"Location {locationIndex} is not a BSA target");
+        }
+
+        // Normalize path (use forward slashes)
+        var normalizedPath = NormalizePath(targetFilePath);
+
+        // Write file to temp directory structure
+        var tempFilePath = Path.Combine(bsa.TempDirectory, normalizedPath.Replace('/', Path.DirectorySeparatorChar));
+        var tempFileDir = Path.GetDirectoryName(tempFilePath);
+
+        if (!string.IsNullOrEmpty(tempFileDir))
+        {
+            Directory.CreateDirectory(tempFileDir);
+        }
+
+        // Thread-safe file tracking and collision detection
+        lock (_writeLock)
+        {
+            // Detect collision: check if temp file already exists
+            if (File.Exists(tempFilePath))
+            {
+                // This is a collision! The temp path already exists.
+                if (bsa.WrittenFiles.TryGetValue(tempFilePath, out var originalPath))
+                {
+                    bsa.Collisions.Add((originalPath, targetFilePath, tempFilePath));
+                }
+            }
+            else
+            {
+                // Track this file
+                bsa.WrittenFiles[tempFilePath] = targetFilePath;
+            }
+
+            File.Copy(sourceFilePath, tempFilePath, true);
+        }
+
+        // Track file count (thread-safe)
+        Interlocked.Increment(ref bsa.FileCount);
+    }
+
+    /// <summary>
     /// Add a file to a BSA collection (writes to temp directory instead of memory, thread-safe)
     /// </summary>
     public void AddFile(int locationIndex, string filePath, byte[] data)
@@ -135,7 +182,7 @@ public class BsaWriter : IDisposable
 
         if (emptyBsas.Count > 0)
         {
-            Console.WriteLine($"\n⚠️  Skipping {emptyBsas.Count} empty BSA(s):");
+            Console.WriteLine($"\nSkipping {emptyBsas.Count} empty BSA(s):");
             foreach (var (_, bsa) in emptyBsas.Take(5))
             {
                 Console.WriteLine($"    - {bsa.Name}");
@@ -148,7 +195,7 @@ public class BsaWriter : IDisposable
 
         if (nonEmptyBsas.Count == 0)
         {
-            Console.WriteLine("\n⚠️  No BSA files to create (all are empty)");
+            Console.WriteLine("\nNo BSA files to create (all are empty)");
             return 0;
         }
 
@@ -165,18 +212,18 @@ public class BsaWriter : IDisposable
 
                 if (WriteBsa(bsa))
                 {
-                    Console.WriteLine("✅");
+                    Console.WriteLine("OK");
                     successCount++;
                 }
                 else
                 {
-                    Console.WriteLine("❌");
+                    Console.WriteLine("FAILED");
                     failCount++;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ {ex.Message}");
+                Console.WriteLine($"FAILED {ex.Message}");
                 failCount++;
             }
         }
@@ -405,7 +452,7 @@ public class BsaWriter : IDisposable
 
         if (totalCollisions > 0)
         {
-            Console.WriteLine($"\n⚠️  WARNING: {totalCollisions} file path collisions detected!");
+            Console.WriteLine($"\nWARNING: {totalCollisions} file path collisions detected!");
             Console.WriteLine("   Files with different cases overwriting each other due to case-insensitive filesystem.");
 
             // Save detailed report

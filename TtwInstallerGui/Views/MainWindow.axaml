@@ -14,12 +14,10 @@
     <DockPanel Margin="20">
         <!-- Header with Title and Settings Button -->
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,15">
-            <Button DockPanel.Dock="Right"
-                    Content="⚙️ Settings"
-                    Command="{Binding OpenSettingsCommand}"
-                    Width="120"
-                    Height="35"
-                    VerticalAlignment="Top"/>
+        <Button Command="{Binding OpenSettingsCommand}" 
+                Content="Settings" 
+                Margin="0,0,0,10"
+                HorizontalAlignment="Right"/>
             <StackPanel>
                 <TextBlock Text="Universal MPI Installer"
                            FontSize="24"

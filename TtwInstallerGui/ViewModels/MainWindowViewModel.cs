@@ -123,7 +123,7 @@ public partial class MainWindowViewModel : ObservableObject
             AppendUniversalLog("");
             AppendUniversalLog("********************************************************");
             AppendUniversalLog("*                                                      *");
-            AppendUniversalLog("*        ❌ APPLICATION STARTUP FAILED ❌             *");
+            AppendUniversalLog("*         APPLICATION STARTUP FAILED                  *");
             AppendUniversalLog("*                                                      *");
             AppendUniversalLog("********************************************************");
             AppendUniversalLog("");
@@ -138,8 +138,8 @@ public partial class MainWindowViewModel : ObservableObject
             AppendUniversalLog("********************************************************");
             AppendUniversalLog("");
 
-            UniversalMpiInfo = "❌ Dependency check failed - see log for details";
-            UniversalProgressText = "❌ DEPENDENCY CHECK FAILED";
+            UniversalMpiInfo = "Dependency check failed - see log for details";
+            UniversalProgressText = "DEPENDENCY CHECK FAILED";
         }
         else
         {
@@ -341,7 +341,7 @@ public partial class MainWindowViewModel : ObservableObject
 
                 // Build MPI info display
                 var infoBuilder = new StringBuilder();
-                infoBuilder.AppendLine($"📦 {manifest.Package?.Title ?? "Unknown Package"}");
+                infoBuilder.AppendLine($"Package: {manifest.Package?.Title ?? "Unknown Package"}");
                 infoBuilder.AppendLine($"Version: {manifest.Package?.Version ?? "Unknown"}");
                 infoBuilder.AppendLine($"Author: {manifest.Package?.Author ?? "Unknown"}");
                 if (!string.IsNullOrEmpty(manifest.Package?.Description))
@@ -381,8 +381,8 @@ public partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            UniversalMpiInfo = $"❌ Error parsing MPI:\n{ex.Message}";
-            UniversalMpiLoaded = false;
+            UniversalMpiInfo = $"Error parsing MPI:\n{ex.Message}";
+            UniversalProgressText = "INVALID MPI FILE";
         }
     }
 
@@ -430,7 +430,7 @@ public partial class MainWindowViewModel : ObservableObject
         // Check dependencies first
         if (!_dependenciesAvailable)
         {
-            AppendUniversalLog("❌ Error: Cannot start installation - required dependencies are missing!");
+            AppendUniversalLog("Error: Cannot start installation - required dependencies are missing!");
             AppendUniversalLog("   Please check the startup error message above and reinstall the application.");
             return;
         }
@@ -438,29 +438,29 @@ public partial class MainWindowViewModel : ObservableObject
         // Validate
         if (_universalCachedManifest == null)
         {
-            AppendUniversalLog("❌ Error: No MPI loaded. Please select an MPI file first.");
+            AppendUniversalLog("Error: No MPI loaded. Please select an MPI file first.");
             return;
         }
 
         // Check required paths
         if (UniversalNeedsFo3 && string.IsNullOrWhiteSpace(UniversalFo3Path))
         {
-            AppendUniversalLog("❌ Error: Fallout 3 path is required!");
+            AppendUniversalLog("Error: Fallout 3 path is required!");
             return;
         }
         if (UniversalNeedsFnv && string.IsNullOrWhiteSpace(UniversalFnvPath))
         {
-            AppendUniversalLog("❌ Error: Fallout New Vegas path is required!");
+            AppendUniversalLog("Error: Fallout New Vegas path is required!");
             return;
         }
         if (UniversalNeedsOblivion && string.IsNullOrWhiteSpace(UniversalOblivionPath))
         {
-            AppendUniversalLog("❌ Error: Oblivion path is required!");
+            AppendUniversalLog("Error: Oblivion path is required!");
             return;
         }
         if (string.IsNullOrWhiteSpace(UniversalOutputPath))
         {
-            AppendUniversalLog("❌ Error: Output path is required!");
+            AppendUniversalLog("Error: Output path is required!");
             return;
         }
 
@@ -474,12 +474,15 @@ public partial class MainWindowViewModel : ObservableObject
         try
         {
             await Task.Run(() => RunUniversalInstallInternal());
-            AppendUniversalLog("\n✅ Installation completed successfully!");
+            UniversalProgressText = "INSTALLATION COMPLETE";
+            UniversalMpiInfo = "Installation finished successfully.";
+            AppendUniversalLog("\nInstallation completed successfully!");
         }
         catch (Exception ex)
         {
-            AppendUniversalLog($"\n❌ Error: {ex.Message}");
-            AppendUniversalLog($"{ex.StackTrace}");
+            AppendUniversalLog($"\nError: {ex.Message}");
+            UniversalProgressText = "INSTALLATION FAILED";
+            UniversalMpiInfo = $"Failed: {ex.Message}";
         }
         finally
         {
@@ -558,16 +561,14 @@ public partial class MainWindowViewModel : ObservableObject
 
             if (!validationPassed)
             {
-                AppendUniversalLog("\n❌ Validation failed. Installation cannot continue.");
-                AppendUniversalLog("Please verify your game files and try again.\n");
-                if (!string.IsNullOrEmpty(errorDetails))
-                {
-                    AppendUniversalLog($"\n{errorDetails}\n");
-                }
-                throw new Exception("Validation failed");
+                AppendUniversalLog("\nValidation failed. Installation cannot continue.");
+                UniversalProgressText = "VALIDATION FAILED";
+                return;
             }
 
-            AppendUniversalLog("✅ All validation checks passed\n");
+            // ...
+
+            AppendUniversalLog("All validation checks passed\n");
         }
 
         // Debug: Log location mappings
@@ -741,11 +742,11 @@ public partial class MainWindowViewModel : ObservableObject
 
             if (bsaFailCount > 0)
             {
-                AppendUniversalLog($"⚠️ Failed to write {bsaFailCount} BSA files");
+                AppendUniversalLog($"Failed to write {bsaFailCount} BSA files");
             }
             else
             {
-                AppendUniversalLog("✅ All BSA archives written successfully");
+                AppendUniversalLog("All BSA archives written successfully");
             }
 
             // Clean up temp staging directory
@@ -762,12 +763,13 @@ public partial class MainWindowViewModel : ObservableObject
         postCommandRunner.RunPostCommands(postCommands);
 
         UpdateUniversalProgress(100, "Installation complete!");
-        AppendUniversalLog($"\n✅ Assets processed: {processedAssets}/{totalAssets}");
-        AppendUniversalLog($"   Success: {successCount}, Errors: {errorCount}");
+        // Final summary
+        AppendUniversalLog($"\nAssets processed: {processedAssets}/{totalAssets}");
+        AppendUniversalLog($"Errors: {errorCount}");
+        // AppendUniversalLog($"Time: {sw.Elapsed}");
 
-        // Write log
-        logger.WriteLogFile(UniversalOutputPath);
-        AppendUniversalLog($"\n📝 Detailed log saved to: {Path.Combine(UniversalOutputPath, "ttw-installation.log")}");
+        // Location of log
+        AppendUniversalLog($"\nDetailed log saved to: {Path.Combine(UniversalOutputPath, "ttw-installation.log")}");
     }
 
     private void AppendUniversalLog(string message)

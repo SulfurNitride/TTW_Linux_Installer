@@ -26,7 +26,7 @@ public static class Program
 
             if (missingRequired)
             {
-                Console.WriteLine("❌ Missing required paths. Please provide configuration via:");
+                Console.WriteLine("Missing required paths. Please provide configuration via:");
                 Console.WriteLine("   1. Command-line arguments (run with --help for details)");
                 Console.WriteLine("   2. Create a mpi-config.json file in the current directory");
                 Console.WriteLine();
@@ -36,7 +36,7 @@ public static class Program
         }
         else
         {
-            Console.WriteLine($"✅ Loaded configuration from {configFile}\n");
+            Console.WriteLine($"Loaded configuration from {configFile}\n");
             var cmdLineConfig = InstallConfig.FromArgs(args);
             config.StartInstallation = cmdLineConfig.StartInstallation;
         }
@@ -44,7 +44,7 @@ public static class Program
         // Check if --start flag was provided
         if (!config.StartInstallation)
         {
-            Console.WriteLine("⚠️  Installation ready but not started.");
+            Console.WriteLine("Installation ready but not started.");
             Console.WriteLine();
             Console.WriteLine("To begin installation, run with the --start flag:");
             if (File.Exists(configFile))
@@ -60,7 +60,7 @@ public static class Program
             return 0;
         }
 
-        Console.WriteLine("🚀 Starting installation...\n");
+        Console.WriteLine("Starting installation...\n");
 
         return RunInstallation(config);
     }
@@ -74,11 +74,11 @@ public static class Program
         {
             config.Validate();
             config.PrintConfiguration();
-            Console.WriteLine("✅ Configuration valid\n");
+            Console.WriteLine("Configuration valid\n");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Configuration error: {ex.Message}");
+            Console.WriteLine($"Configuration error: {ex.Message}");
             return 1;
         }
 
@@ -94,7 +94,7 @@ public static class Program
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ MPI extraction failed: {ex.Message}");
+                Console.WriteLine($"MPI extraction failed: {ex.Message}");
                 return 1;
             }
         }
@@ -142,7 +142,7 @@ public static class Program
 
         if (!validationPassed)
         {
-            Console.WriteLine("\n❌ Validation failed. Installation cannot continue.");
+            Console.WriteLine("\nValidation failed. Installation cannot continue.");
             Console.WriteLine("Please verify your game files and try again.\n");
             return 1; // Exit immediately on validation failure
         }
@@ -180,18 +180,18 @@ public static class Program
 
                 if (assetProcessor.ProcessAsset(asset))
                 {
-                    Console.WriteLine("✅");
+                    Console.WriteLine("OK");
                     newSuccessCount++;
                 }
                 else
                 {
-                    Console.WriteLine("❌");
+                    Console.WriteLine("FAILED");
                     newFailCount++;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ {ex.Message}");
+                Console.WriteLine($"FAILED {ex.Message}");
                 newFailCount++;
             }
         }
@@ -214,18 +214,18 @@ public static class Program
 
                 if (assetProcessor.ProcessAsset(asset))
                 {
-                    Console.WriteLine("✅");
+                    Console.WriteLine("OK");
                     copySuccessCount++;
                 }
                 else
                 {
-                    Console.WriteLine("❌");
+                    Console.WriteLine("FAILED");
                     copyFailCount++;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ {ex.Message}");
+                Console.WriteLine($"FAILED {ex.Message}");
                 copyFailCount++;
             }
         }
@@ -248,18 +248,18 @@ public static class Program
 
                 if (assetProcessor.ProcessAsset(asset))
                 {
-                    Console.WriteLine("✅");
+                    Console.WriteLine("OK");
                     patchSuccessCount++;
                 }
                 else
                 {
-                    Console.WriteLine("❌");
+                    Console.WriteLine("FAILED");
                     patchFailCount++;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ {ex.Message}");
+                Console.WriteLine($"FAILED {ex.Message}");
                 patchFailCount++;
             }
         }
@@ -300,12 +300,12 @@ public static class Program
 
                     if (success)
                     {
-                        Console.WriteLine("✅");
+                        Console.WriteLine("OK");
                         oggEnc2SuccessCount++;
                     }
                     else
                     {
-                        Console.WriteLine("❌");
+                        Console.WriteLine("FAILED");
                         oggEnc2FailCount++;
                     }
                 }
@@ -314,7 +314,7 @@ public static class Program
             {
                 lock (oggEnc2Lock)
                 {
-                    Console.WriteLine($"  [{oggEnc2SuccessCount + oggEnc2FailCount + 1}/{oggEnc2Assets.Count}] {asset.SourcePath} ❌ {ex.Message}");
+                    Console.WriteLine($"  [{oggEnc2SuccessCount + oggEnc2FailCount + 1}/{oggEnc2Assets.Count}] {asset.SourcePath} FAILED {ex.Message}");
                     oggEnc2FailCount++;
                 }
             }
@@ -351,12 +351,12 @@ public static class Program
 
                     if (success)
                     {
-                        Console.WriteLine("✅");
+                        Console.WriteLine("OK");
                         audioEncSuccessCount++;
                     }
                     else
                     {
-                        Console.WriteLine("❌");
+                        Console.WriteLine("FAILED");
                         audioEncFailCount++;
                     }
                 }
@@ -365,7 +365,7 @@ public static class Program
             {
                 lock (audioEncLock)
                 {
-                    Console.WriteLine($"  [{audioEncSuccessCount + audioEncFailCount + 1}/{audioEncAssets.Count}] {asset.SourcePath} ❌ {ex.Message}");
+                    Console.WriteLine($"  [{audioEncSuccessCount + audioEncFailCount + 1}/{audioEncAssets.Count}] {asset.SourcePath} FAILED {ex.Message}");
                     audioEncFailCount++;
                 }
             }
@@ -394,12 +394,12 @@ public static class Program
 
         if (totalFails == 0)
         {
-            Console.WriteLine("\n✅ Installation completed successfully!");
+            Console.WriteLine("\nInstallation completed successfully!");
             Console.WriteLine("MPI package has been installed with all BSA archives created.");
         }
         else
         {
-            Console.WriteLine($"\n⚠️  Installation completed with {totalFails} errors.");
+            Console.WriteLine($"\nInstallation completed with {totalFails} errors.");
         }
 
         return totalFails > 0 ? 1 : 0;

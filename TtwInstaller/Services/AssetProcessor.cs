@@ -45,7 +45,7 @@ public class AssetProcessor
             if (fileData == null)
             {
                 _logger?.LogMissingFile(asset.SourcePath, $"Not found in BSA: {bsaPath}");
-                Console.WriteLine($"  ⚠️  File not found in BSA: {asset.SourcePath}");
+                Console.WriteLine($"  File not found in BSA: {asset.SourcePath}");
                 return false;
             }
         }
@@ -66,13 +66,15 @@ public class AssetProcessor
                 var foundPath = FindFileCaseInsensitive(sourcePath);
                 if (foundPath == null)
                 {
-                    Console.WriteLine($"  ⚠️  Source file not found in MPI (tried: {sourcePath})");
+                    Console.WriteLine($"  Source file not found in MPI (tried: {sourcePath})");
                     return false;
                 }
                 sourcePath = foundPath;
             }
 
-            fileData = File.ReadAllBytes(sourcePath);
+            // Optimized: Use stream copy instead of loading into memory
+            WriteFileDataFromDisk(asset, sourcePath);
+            return true;
         }
 
         // Write to target (BSA or disk)
@@ -97,15 +99,14 @@ public class AssetProcessor
             var foundPath = FindFileCaseInsensitive(sourcePath);
             if (foundPath == null)
             {
-                Console.WriteLine($"  ⚠️  Source file not found in MPI (tried: {sourcePath})");
+                Console.WriteLine($"  Source file not found in MPI (tried: {sourcePath})");
                 return false;
             }
             sourcePath = foundPath;
         }
 
-        // Read file data and write to target (BSA or disk)
-        var fileData = File.ReadAllBytes(sourcePath);
-        WriteFileData(asset, fileData);
+        // Optimized: Use stream copy
+        WriteFileDataFromDisk(asset, sourcePath);
         return true;
     }
 
@@ -144,7 +145,7 @@ public class AssetProcessor
                 var foundPath = FindFileCaseInsensitive(patchFile);
                 if (foundPath == null)
                 {
-                    Console.WriteLine($"  ⚠️  Patch file not found: {patchFile}");
+                    Console.WriteLine($"  Patch file not found: {patchFile}");
                     return false;
                 }
                 patchFile = foundPath;
@@ -193,7 +194,7 @@ public class AssetProcessor
 
             if (sourceData == null)
             {
-                Console.WriteLine($"  ⚠️  Source file for patching not found: {asset.SourcePath}");
+                Console.WriteLine($"  Source file for patching not found: {asset.SourcePath}");
                 Console.WriteLine($"       This file is required to apply the patch.");
                 return false;
             }
@@ -240,7 +241,7 @@ public class AssetProcessor
                     if (lz4Process.ExitCode != 0)
                     {
                         var error = lz4Process.StandardError.ReadToEnd();
-                        Console.WriteLine($"  ⚠️  LZ4 decompression failed: {error}");
+                        Console.WriteLine($"  LZ4 decompression failed: {error}");
                         if (File.Exists(tempDecompressedPatch))
                             File.Delete(tempDecompressedPatch);
                         return false;
@@ -251,7 +252,7 @@ public class AssetProcessor
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"  ⚠️  LZ4 decompression failed: {ex.Message}");
+                    Console.WriteLine($"  LZ4 decompression failed: {ex.Message}");
                     if (File.Exists(tempDecompressedPatch))
                         File.Delete(tempDecompressedPatch);
                     return false;
@@ -289,7 +290,7 @@ public class AssetProcessor
                     var error = process.StandardError.ReadToEnd();
                     var output = process.StandardOutput.ReadToEnd();
 
-                    Console.WriteLine($"  ⚠️  xdelta3 patch failed:");
+                    Console.WriteLine($"  xdelta3 patch failed:");
                     Console.WriteLine($"       Error: {error.Trim()}");
 
                     if (!string.IsNullOrEmpty(output))
@@ -326,7 +327,7 @@ public class AssetProcessor
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠️  Patch error: {ex.Message}");
+            Console.WriteLine($"  Patch error: {ex.Message}");
             return false;
         }
     }
@@ -364,7 +365,7 @@ public class AssetProcessor
 
             if (sourceData == null)
             {
-                Console.WriteLine($"  ⚠️  Source file not found: {asset.SourcePath}");
+                Console.WriteLine($"  Source file not found: {asset.SourcePath}");
                 return false;
             }
 
@@ -407,7 +408,7 @@ public class AssetProcessor
                 if (!process.WaitForExit(30000))
                 {
                     process.Kill();
-                    Console.WriteLine($"  ⚠️  FFmpeg timeout (30s) - killed process");
+                    Console.WriteLine($"  FFmpeg timeout (30s) - killed process");
                     return false;
                 }
 
@@ -416,7 +417,7 @@ public class AssetProcessor
 
                 if (process.ExitCode != 0)
                 {
-                    Console.WriteLine($"  ⚠️  FFmpeg failed (exit {process.ExitCode}): {stderr}");
+                    Console.WriteLine($"  FFmpeg failed (exit {process.ExitCode}): {stderr}");
                     return false;
                 }
 
@@ -434,7 +435,7 @@ public class AssetProcessor
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠️  OggEnc2 error: {ex.Message}");
+            Console.WriteLine($"  OggEnc2 error: {ex.Message}");
             return false;
         }
     }
@@ -471,7 +472,7 @@ public class AssetProcessor
 
             if (sourceData == null)
             {
-                Console.WriteLine($"  ⚠️  Source file not found: {asset.SourcePath}");
+                Console.WriteLine($"  Source file not found: {asset.SourcePath}");
                 return false;
             }
 
@@ -563,7 +564,7 @@ public class AssetProcessor
                 if (!process.WaitForExit(30000))
                 {
                     process.Kill();
-                    Console.WriteLine($"  ⚠️  FFmpeg timeout (30s) - killed process");
+                    Console.WriteLine($"  FFmpeg timeout (30s) - killed process");
                     return false;
                 }
 
@@ -572,7 +573,7 @@ public class AssetProcessor
 
                 if (process.ExitCode != 0)
                 {
-                    Console.WriteLine($"  ⚠️  FFmpeg failed (exit {process.ExitCode}): {stderr}");
+                    Console.WriteLine($"  FFmpeg failed (exit {process.ExitCode}): {stderr}");
                     return false;
                 }
 
@@ -590,7 +591,7 @@ public class AssetProcessor
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠️  AudioEnc error: {ex.Message}");
+            Console.WriteLine($"  AudioEnc error: {ex.Message}");
             return false;
         }
     }
@@ -619,6 +620,40 @@ public class AssetProcessor
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Write file data to either BSA or disk from a source file (efficient copy)
+    /// </summary>
+    private void WriteFileDataFromDisk(Asset asset, string sourcePath)
+    {
+        // Normalize target path (strip .\ or ./ prefix)
+        var filePath = NormalizeRelativePath(asset.GetEffectiveTargetPath());
+
+        // Check if target location is a BSA
+        if (_bsaWriter != null && _bsaWriter.IsBsaLocation(asset.TargetLoc))
+        {
+            // Add to BSA collection using efficient copy
+            _bsaWriter.AddFileFromPath(asset.TargetLoc, filePath, sourcePath);
+        }
+        else
+        {
+            // Write to disk
+            var targetPath = Path.Combine(
+                _locationResolver.GetDirectoryPath(asset.TargetLoc),
+                filePath
+            );
+
+            var normalizedTargetPath = targetPath.Replace('\\', Path.DirectorySeparatorChar);
+            var targetDir = Path.GetDirectoryName(normalizedTargetPath);
+
+            if (!string.IsNullOrEmpty(targetDir))
+            {
+                Directory.CreateDirectory(targetDir);
+            }
+
+            File.Copy(sourcePath, normalizedTargetPath, true);
+        }
     }
 
     /// <summary>

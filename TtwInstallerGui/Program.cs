@@ -41,7 +41,7 @@ sealed class Program
 
             if (missingPaths)
             {
-                Console.WriteLine("❌ Missing required paths. Please provide configuration via:");
+                Console.WriteLine("Missing required paths. Please provide configuration via:");
                 Console.WriteLine("   1. Command-line arguments (run with --help for details)");
                 Console.WriteLine("   2. Create a ttw-config.json file in the current directory");
                 Console.WriteLine("   3. Run without arguments to launch GUI mode");
@@ -60,24 +60,16 @@ sealed class Program
         // Check if --start flag was provided
         if (!config.StartInstallation)
         {
-            Console.WriteLine("⚠️  Installation ready but not started.");
-            Console.WriteLine();
-            Console.WriteLine("To begin installation, run with the --start flag:");
-            if (File.Exists(configFile))
-            {
-                Console.WriteLine("  ./TtwInstaller --start");
-            }
-            else
-            {
-                Console.WriteLine("  ./TtwInstaller --fo3 <path> --fnv <path> --mpi <path> --output <path> --start");
-            }
-            Console.WriteLine();
-            Console.WriteLine("Or run without arguments to use GUI mode.");
-            Console.WriteLine("Run with --help for more information.");
+            Console.WriteLine("Installation ready but not started.");
+            Console.WriteLine("Use --start to automatically begin installation.");
+
+            // Even if not auto-starting, we launch the GUI
+            BuildAvaloniaApp()
+                .StartWithClassicDesktopLifetime(args);
             return 0;
         }
 
-        Console.WriteLine("🚀 Starting installation...\n");
+        Console.WriteLine("Starting installation...\n");
 
         return TtwInstaller.Program.RunInstallation(config);
     }

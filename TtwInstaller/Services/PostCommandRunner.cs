@@ -50,7 +50,7 @@ public class PostCommandRunner
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"  ⚠️  Command failed: {ex.Message}");
+                Console.WriteLine($"  Command failed: {ex.Message}");
                 failCount++;
             }
         }
@@ -139,7 +139,7 @@ public class PostCommandRunner
                         }
                         else
                         {
-                            Console.WriteLine($"  ⚠️  File not found: {oldPath}");
+                            Console.WriteLine($"  File not found: {oldPath}");
                         }
                         return true;
                     }

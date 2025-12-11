@@ -34,7 +34,7 @@ public static class DependencyChecker
         if (missing.Count > 0)
         {
             log("");
-            log("❌ Dependency check failed! Required dependencies are missing.");
+            log("Dependency check failed! Required dependencies are missing.");
             log("");
 
             // Categorize missing dependencies
@@ -51,7 +51,7 @@ public static class DependencyChecker
             return (false, missing);
         }
 
-        log("✅ All dependency checks passed");
+        log("All dependency checks passed");
         return (true, missing);
     }
 
@@ -65,23 +65,23 @@ public static class DependencyChecker
             var appDir = AppContext.BaseDirectory;
             if (!path.StartsWith(appDir))
             {
-                log($"  ❌ {name}: Found at system path instead of bundled - not supported");
+                log($"  {name}: Found at system path instead of bundled - not supported");
                 return false;
             }
 
             // Verify file exists
             if (!File.Exists(path))
             {
-                log($"  ❌ {name}: Not found at expected path: {path}");
+                log($"  {name}: Not found at expected path: {path}");
                 return false;
             }
 
-            log($"  ✅ {name}: Found (bundled)");
+            log($"  {name}: Found (bundled)");
             return true;
         }
         catch (Exception ex)
         {
-            log($"  ❌ {name}: MISSING - {ex.Message}");
+            log($"  {name}: MISSING - {ex.Message}");
             return false;
         }
     }
@@ -92,18 +92,18 @@ public static class DependencyChecker
         {
             if (!isAvailableFunc())
             {
-                log($"  ❌ {name}: Not found in system PATH");
+                log($"  {name}: Not found in system PATH");
                 log($"     Install with: sudo pacman -S {name}");
                 return false;
             }
 
             var path = getPathFunc();
-            log($"  ✅ {name}: Found at {path}");
+            log($"  {name}: Found at {path}");
             return true;
         }
         catch (Exception ex)
         {
-            log($"  ❌ {name}: MISSING - {ex.Message}");
+            log($"  {name}: MISSING - {ex.Message}");
             return false;
         }
     }

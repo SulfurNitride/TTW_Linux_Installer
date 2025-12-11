@@ -24,7 +24,7 @@ public class ValidationService
     {
         if (checks == null || checks.Count == 0)
         {
-            Console.WriteLine("⚠️  No validation checks found in manifest.");
+            Console.WriteLine("No validation checks found in manifest.");
             return true; // No checks is not a failure, but should be logged
         }
 
@@ -111,14 +111,14 @@ public class ValidationService
                     return CheckNoProgramFilesWithDetails(check);
 
                 default:
-                    Console.WriteLine($"⚠️  Unknown check type: {check.Type}");
+                    Console.WriteLine($"Unknown check type: {check.Type}");
                     return (true, string.Empty); // Don't fail on unknown check types
             }
         }
         catch (Exception ex)
         {
             string error = $"Error running check: {ex.Message}";
-            Console.WriteLine($"⚠️  {error}");
+            Console.WriteLine($"{error}");
             return (false, error);
         }
     }
@@ -187,8 +187,8 @@ public class ValidationService
 
         if (!checkResult)
         {
-            Console.WriteLine($"❌ File Check Failed: {check.File}");
-            string error = $"❌ File Check Failed: {check.File}\n   Path: {filePath}";
+            Console.WriteLine($"File Check Failed: {check.File}");
+            string error = $"File Check Failed: {check.File}\n   Path: {filePath}";
             if (!string.IsNullOrEmpty(check.CustomMessage))
             {
                 error += $"\n   {check.CustomMessage}";
@@ -206,7 +206,7 @@ public class ValidationService
                 .ToList();
 
             // Calculate both MD5 and SHA1
-            Console.Write($"🔍 Verifying {check.File}... ");
+            Console.Write($"Verifying {check.File}... ");
             string actualMD5 = ChecksumHelper.CalculateMD5(filePath);
             string actualSHA1 = ChecksumHelper.CalculateSHA1(filePath);
 
@@ -240,10 +240,10 @@ public class ValidationService
 
             if (!checksumMatches)
             {
-                Console.WriteLine($"❌ FAILED");
+                Console.WriteLine($"FAILED");
 
                 // Show both hash types in error
-                string error = $"❌ Checksum Verification Failed: {check.File}\n" +
+                string error = $"Checksum Verification Failed: {check.File}\n" +
                               $"   Expected one of: {string.Join(", ", expectedChecksums.Take(2))}\n" +
                               $"   Actual MD5:  {actualMD5}\n" +
                               $"   Actual SHA1: {actualSHA1}";
@@ -275,15 +275,15 @@ public class ValidationService
                 return (false, error);
             }
 
-            Console.WriteLine($"✅ OK ({hashType}: {matchedHash.Substring(0, 8)}...)");
+            Console.WriteLine($"OK ({hashType}: {matchedHash.Substring(0, 8)}...)");
         }
         else if (!check.Inverted && fileExists)
         {
-            Console.WriteLine($"✅ File exists: {check.File}");
+            Console.WriteLine($"File exists: {check.File}");
         }
         else if (check.Inverted && !fileExists)
         {
-            Console.WriteLine($"✅ File correctly absent: {check.File}");
+            Console.WriteLine($"File correctly absent: {check.File}");
         }
 
         return (true, string.Empty);
@@ -292,14 +292,14 @@ public class ValidationService
     private (bool Success, string ErrorMessage) CheckFreeSizeWithDetails(Check check)
     {
         // Disk space detection disabled - users are informed to have 20GB via startup dialog
-        Console.WriteLine($"💾 Disk space check skipped (ensure 20GB+ available)");
+        Console.WriteLine($"Disk space check skipped (ensure 20GB+ available)");
         return (true, string.Empty);
     }
 
     private (bool Success, string ErrorMessage) CheckNoProgramFilesWithDetails(Check check)
     {
         string path = _locationResolver.GetDirectoryPath(check.Loc);
-        Console.Write($"📁 Checking installation path... ");
+        Console.Write($"Checking installation path... ");
 
         bool isInProgramFiles = path.Contains("Program Files", StringComparison.OrdinalIgnoreCase);
 
@@ -310,8 +310,8 @@ public class ValidationService
 
         if (isInProgramFiles)
         {
-            Console.WriteLine($"❌ INVALID");
-            string error = $"❌ Invalid Installation Path\n" +
+            Console.WriteLine($"INVALID");
+            string error = $"Invalid Installation Path\n" +
                           $"   Path: {path}\n" +
                           $"   Cannot install to Program Files directory";
 
@@ -330,7 +330,7 @@ public class ValidationService
             return (false, error);
         }
 
-        Console.WriteLine($"✅ OK");
+        Console.WriteLine($"OK");
         return (true, string.Empty);
     }
 }

@@ -86,9 +86,10 @@ jobs:
           ## Universal MPI Installer for Linux
 
           ### What's New
-          - Universal MPI support (auto-detects game requirements)
-          - 4-6x faster with parallel processing
-          - Works with TTW, BSA Decompressors, and more
+          - **Optimized Performance:** Significantly reduced memory usage and faster installation via stream-based processing.
+          - **Clean UI:** Removed emojis for a more professional and compatible terminal output.
+          - Universal MPI support (auto-detects game requirements).
+          - Parallel processing for assets.
 
           ### Installation
           1. Download `universal-mpi-installer-linux-x64.tar.gz`

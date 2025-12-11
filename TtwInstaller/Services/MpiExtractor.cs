@@ -78,10 +78,10 @@ public class MpiExtractor
                 }
             }
 
-            Console.WriteLine($"\n✅ MPI extraction complete: {extracted} files extracted");
+            Console.WriteLine($"\nMPI extraction complete: {extracted} files extracted");
             if (failed > 0)
             {
-                Console.WriteLine($"⚠️  {failed} files failed to extract\n");
+                Console.WriteLine($"{failed} files failed to extract\n");
             }
 
             return tempDir;
