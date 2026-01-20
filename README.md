@@ -1,36 +1,24 @@
-# TTW Linux Installer
+<img width="2325" height="1895" alt="image" src="https://github.com/user-attachments/assets/699715e9-47cc-4914-858c-d05427a57b8d" />
 
-A native Linux installer for Tale of Two Wastelands (TTW) and other MPI packages like the Oblivion Decompressor.
+A linux native installer for MPI packages (TTW, BSA Decompressors, etc.).
 
-## Features
+To run it all you need to do is either double click it and allow executing, or `chmod +x mpi_installer_gui`.
 
-- Native Linux support (no Wine required for the installer itself)
-- GUI and CLI interfaces
-- BSA archive creation (v104/v105 format)
-- xdelta3 binary patching
-- Audio transcoding (MP3/WAV to OGG Vorbis)
-- Multi-threaded asset processing
+## Where to get MPI files?
 
-## Installation
+**TTW:** https://mod.pub/ttw/133/files - need to make an account and download the latest Tale of Two Wastelands file. Extract it and the mpi file will be inside.
 
-### From Releases
+**FNV BSA DECOMPRESSOR:** https://www.nexusmods.com/newvegas/mods/65854
 
-Download the latest release from the [Releases](https://github.com/SulfurNitride/TTW_Linux_Installer/releases) page.
+**OBLIVION BSA DECOMPRESSOR:** https://www.nexusmods.com/oblivion/mods/49652
 
-```bash
-tar -xzf ttw-installer-linux-x86_64.tar.gz
-cd release
-./mpi_installer_gui  # GUI mode
-# or
-./mpi_installer --help  # CLI mode
-```
+**Requirements:** None! (Everything is bundled)
 
-### Building from Source
+## Performance Note
 
-Requirements:
-- Rust 1.70+
-- xdelta3
-- ALSA development libraries
+This installer uses parallel processing for speed - it will max out your CPU during audio processing (this is normal and good). TTW installs typically take 15-30 minutes instead of 1-2 hours.
+
+## Building from Source
 
 ```bash
 # Install dependencies (Arch/CachyOS)
@@ -45,54 +33,15 @@ cargo build --release
 # Binaries will be in target/release/
 ```
 
-## Usage
-
-### GUI
+## CLI Usage
 
 ```bash
-./mpi_installer_gui
+# Install TTW
+./mpi_installer install --mpi /path/to/TTW.mpi --fo3 /path/to/Fallout3 --fnv /path/to/FalloutNV --dest /path/to/FalloutNV/Data
+
+# Install Oblivion Decompressor
+./mpi_installer install --mpi /path/to/OblDecomp.mpi --oblivion /path/to/Oblivion --dest /path/to/Oblivion/Data
+
+# Other commands
+./mpi_installer --help
 ```
-
-### CLI
-
-**Install TTW:**
-```bash
-./mpi_installer install \
-  --mpi /path/to/TTW_Main.mpi \
-  --fo3 /path/to/Fallout3 \
-  --fnv /path/to/FalloutNV \
-  --dest /path/to/FalloutNV/Data
-```
-
-**Install Oblivion Decompressor:**
-```bash
-./mpi_installer install \
-  --mpi /path/to/OblDecomp.mpi \
-  --oblivion /path/to/Oblivion \
-  --dest /path/to/Oblivion/Data
-```
-
-**Other commands:**
-```bash
-./mpi_installer inspect --mpi /path/to/package.mpi  # Inspect package contents
-./mpi_installer extract --mpi /path/to/package.mpi --output /path/to/output  # Extract MPI
-./mpi_installer verify --fo3 /path/to/Fallout3  # Verify game installation
-./mpi_installer logs  # View recent installation logs
-```
-
-## Supported MPI Packages
-
-- Tale of Two Wastelands (TTW) 3.x
-- Oblivion Decompressor
-- Other MPI-format mod packages
-
-## Notes
-
-- Game installations should be set up via Steam/GOG with Proton/Wine first
-- The installer processes MPI packages natively on Linux
-- BSA archives are created in the correct format for each game
-- Audio files are automatically transcoded to OGG Vorbis format
-
-## License
-
-MIT
