@@ -42,3 +42,5 @@ cargo build --release
 # Other commands
 ./mpi_installer --help
 ```
+
+Made with AI via Claude Code. In the meantime I'm learning rust when I can. Heres the current playlist.
