@@ -1,0 +1,82 @@
+[package]
+name = "ttw_installer"
+version = "0.1.0"
+edition = "2021"
+description = "Tale of Two Wastelands Linux Installer"
+authors = ["TTW Team"]
+
+[dependencies]
+# BSA handling
+ba2 = "3.0.1"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Compression
+lz4_flex = "0.12"
+flate2 = "1.0"
+
+# Audio decoding (pure Rust)
+symphonia = { version = "0.5", features = ["ogg", "wav", "pcm", "vorbis", "mp3"] }
+
+# Resampling (pure Rust)
+rubato = "0.16"
+
+# WAV writing (pure Rust)
+hound = "3.5"
+
+# OGG/Vorbis encoding (C bindings, bundled)
+vorbis_rs = "0.5"
+
+# MP3 encoding (LAME C bindings)
+mp3lame-encoder = "0.2"
+
+# Serialization (for MPI parsing)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Parallel processing
+rayon = "1.10"
+
+# File utilities
+walkdir = "2.5"
+tempfile = "3.10"
+
+# Hashing
+sha1 = "0.10"
+
+# Path handling
+dirs = "5.0"
+
+# Progress bars
+indicatif = "0.17"
+
+# HTTP for downloading xdelta3
+ureq = "2.9"
+
+# Archive handling
+tar = "0.4"
+zip = "0.6"
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.4"
+chrono = "0.4"
+
+# GUI
+eframe = "0.33.3"
+egui = "0.33.3"
+rfd = "0.17"  # File dialogs
+
+[[bin]]
+name = "mpi_installer"
+path = "src/main.rs"
+
+[[bin]]
+name = "mpi_installer_gui"
+path = "src/gui.rs"
