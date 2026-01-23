@@ -26,8 +26,18 @@ struct UserConfig {
 }
 
 impl UserConfig {
-    /// Get config file path (next to executable)
+    /// Get config file path (uses platform-appropriate config directory)
     fn config_path() -> PathBuf {
+        // Linux: ~/.config/mpi_installer/config.json
+        // Windows: %APPDATA%\mpi_installer\config.json
+        if let Some(config_dir) = dirs::config_dir() {
+            let app_config_dir = config_dir.join("mpi_installer");
+            // Ensure the directory exists
+            let _ = fs::create_dir_all(&app_config_dir);
+            return app_config_dir.join("config.json");
+        }
+
+        // Fallback: next to executable (for portable mode)
         std::env::current_exe()
             .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("mpi_installer.json"))
             .unwrap_or_else(|_| PathBuf::from("mpi_installer.json"))
@@ -55,13 +65,19 @@ impl UserConfig {
     }
 }
 
-/// Get log file path (next to executable)
+/// Get log file path (uses platform-appropriate data directory)
 fn get_log_path(package_name: &str) -> PathBuf {
-    let exe_dir = std::env::current_exe()
-        .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).to_path_buf())
-        .unwrap_or_else(|_| PathBuf::from("."));
+    // Linux: ~/.local/share/mpi_installer/logs/
+    // Windows: %LOCALAPPDATA%\mpi_installer\logs\
+    let logs_dir = if let Some(data_dir) = dirs::data_local_dir() {
+        data_dir.join("mpi_installer").join("logs")
+    } else {
+        // Fallback: next to executable
+        std::env::current_exe()
+            .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("logs"))
+            .unwrap_or_else(|_| PathBuf::from("logs"))
+    };
 
-    let logs_dir = exe_dir.join("logs");
     let _ = fs::create_dir_all(&logs_dir);
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
@@ -150,9 +166,17 @@ impl eframe::App for MpiInstallerApp {
                         self.status = InstallStatus::Failed(e.clone());
                         self.add_log(&format!("Installation failed: {}", e));
                     }
-                    Err(_) => {
-                        self.status = InstallStatus::Failed("Thread panicked".to_string());
-                        self.add_log("Installation thread panicked!");
+                    Err(panic_info) => {
+                        // Extract panic message if possible
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "Unknown panic".to_string()
+                        };
+                        self.status = InstallStatus::Failed(format!("Thread panicked: {}", panic_msg));
+                        self.add_log(&format!("Installation thread panicked: {}", panic_msg));
                     }
                 }
             } else {

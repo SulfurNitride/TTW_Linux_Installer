@@ -13,3 +13,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Binaries (downloaded separately)
+tools/xdelta3.exe
+tools/xdelta3

@@ -21,11 +21,21 @@ impl XdeltaManager {
             .map(|p| p.parent().unwrap_or(Path::new(".")).to_path_buf())
             .unwrap_or_else(|_| PathBuf::from("."));
 
-        exe_dir.join("tools").join("xdelta3")
+        #[cfg(windows)]
+        let binary_name = "xdelta3.exe";
+        #[cfg(not(windows))]
+        let binary_name = "xdelta3";
+
+        exe_dir.join("tools").join(binary_name)
     }
 
     /// Try to find xdelta3 in common locations
     pub fn find_xdelta3() -> Option<PathBuf> {
+        #[cfg(windows)]
+        let binary_name = "xdelta3.exe";
+        #[cfg(not(windows))]
+        let binary_name = "xdelta3";
+
         // Check our tools directory (next to executable)
         let tools_path = Self::default_path();
         if tools_path.exists() {
@@ -33,7 +43,7 @@ impl XdeltaManager {
         }
 
         // Check tools directory relative to cwd
-        let cwd_tools = PathBuf::from("tools/xdelta3");
+        let cwd_tools = PathBuf::from("tools").join(binary_name);
         if cwd_tools.exists() {
             return Some(cwd_tools.canonicalize().unwrap_or(cwd_tools));
         }
@@ -43,30 +53,62 @@ impl XdeltaManager {
             // Go up from target/release/ to project root
             if let Some(exe_dir) = exe_path.parent() {
                 // Check ../../tools/xdelta3 (project root when in target/release/)
-                let project_tools = exe_dir.join("../../tools/xdelta3");
+                let project_tools = exe_dir.join("..").join("..").join("tools").join(binary_name);
                 if project_tools.exists() {
                     return Some(project_tools.canonicalize().unwrap_or(project_tools));
                 }
                 // Check ../tools/xdelta3 (one level up)
-                let parent_tools = exe_dir.join("../tools/xdelta3");
+                let parent_tools = exe_dir.join("..").join("tools").join(binary_name);
                 if parent_tools.exists() {
                     return Some(parent_tools.canonicalize().unwrap_or(parent_tools));
                 }
             }
         }
 
-        // Check system PATH
-        if let Ok(output) = Command::new("which").arg("xdelta3").output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() {
-                    return Some(PathBuf::from(path));
+        // Check system PATH using platform-appropriate command
+        #[cfg(windows)]
+        {
+            // Use 'where' command on Windows
+            if let Ok(output) = Command::new("where").arg("xdelta3.exe").output() {
+                if output.status.success() {
+                    // 'where' can return multiple lines, take the first one
+                    let path = String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if !path.is_empty() {
+                        return Some(PathBuf::from(path));
+                    }
                 }
             }
         }
 
-        // Check common locations
-        let common_paths = [
+        #[cfg(not(windows))]
+        {
+            // Use 'which' command on Unix
+            if let Ok(output) = Command::new("which").arg("xdelta3").output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !path.is_empty() {
+                        return Some(PathBuf::from(path));
+                    }
+                }
+            }
+        }
+
+        // Check common locations (platform-specific)
+        #[cfg(windows)]
+        let common_paths: &[&str] = &[
+            r"C:\Program Files\xdelta3\xdelta3.exe",
+            r"C:\Program Files (x86)\xdelta3\xdelta3.exe",
+            r"C:\xdelta3\xdelta3.exe",
+            r"C:\Tools\xdelta3.exe",
+        ];
+
+        #[cfg(not(windows))]
+        let common_paths: &[&str] = &[
             "/usr/bin/xdelta3",
             "/usr/local/bin/xdelta3",
             "/opt/xdelta3/xdelta3",

@@ -356,8 +356,12 @@ impl AssetProcessor {
             let s = success.load(Ordering::Relaxed);
             let f = failed.load(Ordering::Relaxed);
 
-            // Call progress callback every 100 assets or at specific milestones
-            if current.is_multiple_of(100) || current == total || current <= 10 {
+            // Call progress callback frequently enough for responsive UI
+            // - Every 50 assets for large packages
+            // - Every 10 assets for medium packages (100-1000)
+            // - Every asset for small packages (<100)
+            let callback_interval = if total > 1000 { 50 } else if total > 100 { 10 } else { 1 };
+            if current % callback_interval == 0 || current == total || current <= 5 {
                 callback(current, total, &format!("Processing: {} OK, {} failed", s, f));
             }
         });

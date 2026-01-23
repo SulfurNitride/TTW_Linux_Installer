@@ -31,15 +31,18 @@ fn strip_bsa_prefix(name: &str) -> &str {
 }
 
 /// Handles reading from and writing to BSA archives
+///
+/// Note: Archives are opened fresh for each extraction to avoid lifetime issues.
+/// This is slightly slower but ensures memory safety.
 pub struct BsaHandler {
-    /// Cache of opened archives for reading
-    archive_cache: HashMap<String, Archive<'static>>,
+    /// Track which BSA paths have been accessed (for diagnostics)
+    accessed_bsas: HashMap<String, usize>,
 }
 
 impl BsaHandler {
     pub fn new() -> Self {
         Self {
-            archive_cache: HashMap::new(),
+            accessed_bsas: HashMap::new(),
         }
     }
 
@@ -47,17 +50,12 @@ impl BsaHandler {
     pub fn extract_file(&mut self, bsa_path: &Path, file_path: &str) -> Result<Vec<u8>> {
         let bsa_key = bsa_path.to_string_lossy().to_string();
 
-        // Open archive if not cached
-        if !self.archive_cache.contains_key(&bsa_key) {
-            let (archive, _) = Archive::read(bsa_path)
-                .with_context(|| format!("Failed to open BSA: {}", bsa_path.display()))?;
-            // We need to leak the archive to get a static lifetime for the cache
-            // This is safe since we're caching for the lifetime of the handler
-            let archive: Archive<'static> = unsafe { std::mem::transmute(archive) };
-            self.archive_cache.insert(bsa_key.clone(), archive);
-        }
+        // Track access count for diagnostics
+        *self.accessed_bsas.entry(bsa_key).or_insert(0) += 1;
 
-        let archive = self.archive_cache.get(&bsa_key).unwrap();
+        // Open archive fresh each time (avoids lifetime issues with caching)
+        let (archive, _) = Archive::read(bsa_path)
+            .with_context(|| format!("Failed to open BSA: {}", bsa_path.display()))?;
 
         // Normalize path separators (BSA uses backslashes)
         let normalized_path = file_path.replace('/', "\\");
@@ -103,9 +101,14 @@ impl BsaHandler {
         }
     }
 
-    /// Clear the archive cache
+    /// Clear tracking data (no-op now that caching is removed, kept for API compatibility)
     pub fn clear_cache(&mut self) {
-        self.archive_cache.clear();
+        self.accessed_bsas.clear();
+    }
+
+    /// Get access statistics for diagnostics
+    pub fn access_stats(&self) -> &HashMap<String, usize> {
+        &self.accessed_bsas
     }
 }
 

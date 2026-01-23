@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
 
     steps:
@@ -59,27 +59,92 @@ jobs:
         name: mpi-installer-linux-x86_64
         path: release/
 
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build release
+      run: cargo build --release
+
+    - name: Run tests
+      run: cargo test --release
+
+    - name: Download xdelta3
+      run: |
+        # Download xdelta3 for Windows
+        Invoke-WebRequest -Uri "https://github.com/jmacd/xdelta-gpl/releases/download/v3.1.0/xdelta3-3.1.0-x86_64.exe.zip" -OutFile "xdelta3.zip"
+        Expand-Archive -Path "xdelta3.zip" -DestinationPath "xdelta3_temp"
+        # Find the exe in the extracted folder
+        $exe = Get-ChildItem -Path "xdelta3_temp" -Filter "*.exe" -Recurse | Select-Object -First 1
+        if ($exe) {
+          Copy-Item $exe.FullName -Destination "xdelta3.exe"
+        } else {
+          Write-Error "xdelta3.exe not found in archive"
+          exit 1
+        }
+      shell: pwsh
+
+    - name: Bundle release
+      run: |
+        New-Item -ItemType Directory -Force -Path release\tools
+        Copy-Item target\release\mpi_installer.exe release\
+        Copy-Item target\release\mpi_installer_gui.exe release\
+        Copy-Item xdelta3.exe release\tools\
+      shell: pwsh
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: mpi-installer-windows-x86_64
+        path: release/
+
   release:
-    needs: build
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-    - name: Download artifacts
+    - name: Download Linux artifacts
       uses: actions/download-artifact@v4
       with:
         name: mpi-installer-linux-x86_64
-        path: release/
+        path: release-linux/
 
-    - name: Create tarball
+    - name: Download Windows artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: mpi-installer-windows-x86_64
+        path: release-windows/
+
+    - name: Create tarballs
       run: |
-        cd release
+        cd release-linux
         tar -czvf ../mpi-installer-linux-x86_64.tar.gz .
+        cd ../release-windows
+        zip -r ../mpi-installer-windows-x86_64.zip .
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: mpi-installer-linux-x86_64.tar.gz
+        files: |
+          mpi-installer-linux-x86_64.tar.gz
+          mpi-installer-windows-x86_64.zip
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
