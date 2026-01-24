@@ -50,10 +50,6 @@ tempfile = "3.10"
 sha1 = "0.10"
 hex = "0.4"
 
-# Platform-specific
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 # Path handling
 dirs = "5.0"
 
@@ -77,6 +73,10 @@ chrono = "0.4"
 eframe = "0.33.3"
 egui = "0.33.3"
 rfd = "0.17"  # File dialogs
+
+# Platform-specific (must be at end to not break other deps)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [[bin]]
 name = "mpi_installer"
