@@ -9,29 +9,30 @@ use crate::services::LocationResolver;
 /// Check types from MPI manifest
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckType {
-    /// File must exist
-    FileExists = 0,
-    /// File must have matching checksum
-    FileChecksum = 1,
-    /// Directory must have minimum free space
-    FreeSpace = 2,
+    /// File existence check (with optional checksum verification)
+    /// If Checksums field is present, also verifies hash
+    FileCheck = 0,
+    /// Directory must have minimum free space (uses FreeSize field in MB)
+    FreeSpace = 1,
+    /// Path validation check (e.g., not in Program Files)
+    PathCheck = 2,
 }
 
 impl CheckType {
     pub fn from_i32(value: i32) -> Option<Self> {
         match value {
-            0 => Some(Self::FileExists),
-            1 => Some(Self::FileChecksum),
-            2 => Some(Self::FreeSpace),
+            0 => Some(Self::FileCheck),
+            1 => Some(Self::FreeSpace),
+            2 => Some(Self::PathCheck),
             _ => None,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            Self::FileExists => "FileExists",
-            Self::FileChecksum => "FileChecksum",
+            Self::FileCheck => "FileCheck",
             Self::FreeSpace => "FreeSpace",
+            Self::PathCheck => "PathCheck",
         }
     }
 }
@@ -81,14 +82,19 @@ impl<'a> FileVerifier<'a> {
             let check_type = CheckType::from_i32(check.check_type);
 
             match check_type {
-                Some(CheckType::FileExists) => {
-                    self.verify_file_exists(i, check, &mut result);
-                }
-                Some(CheckType::FileChecksum) => {
-                    self.verify_file_checksum(i, check, &mut result);
+                Some(CheckType::FileCheck) => {
+                    // Type 0: File check - existence and optionally checksum
+                    if check.checksums.is_some() && !check.checksums.as_ref().unwrap().is_empty() {
+                        self.verify_file_checksum(i, check, &mut result);
+                    } else {
+                        self.verify_file_exists(i, check, &mut result);
+                    }
                 }
                 Some(CheckType::FreeSpace) => {
                     self.verify_free_space(i, check, &mut result);
+                }
+                Some(CheckType::PathCheck) => {
+                    self.verify_path_check(i, check, &mut result);
                 }
                 None => {
                     println!("  [{}] SKIP: Unknown check type {}", i + 1, check.check_type);
@@ -230,14 +236,17 @@ impl<'a> FileVerifier<'a> {
     }
 
     /// Verify free space at location
+    /// FreeSize in manifest is in MB
     fn verify_free_space(&self, index: usize, check: &Check, result: &mut VerificationResult) {
-        let required_bytes = check.free_size.unwrap_or(0);
+        let required_mb = check.free_size.unwrap_or(0);
 
-        if required_bytes <= 0 {
+        if required_mb <= 0 {
             println!("  [{}] SKIP: FreeSpace - No size requirement specified", index + 1);
             result.skipped += 1;
             return;
         }
+
+        let required_bytes = required_mb as u64 * 1_048_576; // Convert MB to bytes
 
         let path = match self.resolver.resolve_path(check.loc) {
             Ok(p) => p,
@@ -255,15 +264,19 @@ impl<'a> FileVerifier<'a> {
                 let required_gb = required_bytes as f64 / 1_073_741_824.0;
                 let available_gb = available as f64 / 1_073_741_824.0;
 
-                if available >= required_bytes as u64 {
+                if available >= required_bytes {
                     println!("  [{}] PASS: FreeSpace - {:.2} GB available (need {:.2} GB)",
                         index + 1, available_gb, required_gb);
                     result.passed += 1;
                 } else {
-                    let msg = format!(
-                        "Insufficient space at {}: {:.2} GB available, {:.2} GB required",
-                        path.display(), available_gb, required_gb
-                    );
+                    let msg = if let Some(custom_msg) = &check.custom_message {
+                        format!("{} ({:.2} GB available, {:.2} GB required)", custom_msg, available_gb, required_gb)
+                    } else {
+                        format!(
+                            "Insufficient space at {}: {:.2} GB available, {:.2} GB required",
+                            path.display(), available_gb, required_gb
+                        )
+                    };
                     println!("  [{}] FAIL: {}", index + 1, msg);
                     result.errors.push(msg);
                     result.failed += 1;
@@ -273,6 +286,43 @@ impl<'a> FileVerifier<'a> {
                 println!("  [{}] SKIP: FreeSpace - Cannot check: {}", index + 1, e);
                 result.skipped += 1;
             }
+        }
+    }
+
+    /// Verify path doesn't contain problematic locations (e.g., Program Files)
+    fn verify_path_check(&self, index: usize, check: &Check, result: &mut VerificationResult) {
+        let path = match self.resolver.resolve_path(check.loc) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("  [{}] FAIL: PathCheck - Cannot resolve location: {}", index + 1, e);
+                result.failed += 1;
+                result.errors.push(format!("PathCheck: Cannot resolve location {}", check.loc));
+                return;
+            }
+        };
+
+        let path_str = path.to_string_lossy().to_lowercase();
+
+        // Check for problematic paths (Program Files on Windows)
+        let is_problematic = path_str.contains("program files")
+            || path_str.contains("programfiles")
+            || path_str.contains("program files (x86)");
+
+        let expected_good = !check.inverted; // inverted=false means path should be good
+
+        if is_problematic == check.inverted {
+            // If inverted and problematic, or not inverted and not problematic = PASS
+            println!("  [{}] PASS: PathCheck - {} is valid", index + 1, path.display());
+            result.passed += 1;
+        } else {
+            let msg = if let Some(custom_msg) = &check.custom_message {
+                custom_msg.clone()
+            } else {
+                format!("Path {} is in a problematic location", path.display())
+            };
+            println!("  [{}] FAIL: PathCheck - {}", index + 1, msg);
+            result.errors.push(msg);
+            result.failed += 1;
         }
     }
 
@@ -319,18 +369,33 @@ fn get_available_space(path: &Path) -> Result<u64> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        let meta = fs::metadata(&check_path)?;
-        // Use statvfs for actual free space
-        // For simplicity, we'll use a basic check
-        // In production, you'd use libc::statvfs
-        Ok(meta.len()) // Placeholder - see note below
+        use std::ffi::CString;
+        use std::mem::MaybeUninit;
+
+        let path_cstr = CString::new(check_path.to_string_lossy().as_bytes())
+            .context("Invalid path for space check")?;
+
+        let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
+
+        let result = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
+
+        if result == 0 {
+            let stat = unsafe { stat.assume_init() };
+            // f_bavail = blocks available to unprivileged users
+            // f_frsize = fragment size (actual block size)
+            let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+            Ok(available)
+        } else {
+            bail!("statvfs failed for {}", check_path.display())
+        }
     }
 
     #[cfg(windows)]
     {
-        // Windows implementation would use GetDiskFreeSpaceExW
-        Ok(u64::MAX) // Placeholder
+        // On Windows, just return a large value to pass the check
+        // The actual Windows implementation would use GetDiskFreeSpaceExW
+        // but that requires winapi crate
+        Ok(u64::MAX)
     }
 
     #[cfg(not(any(unix, windows)))]

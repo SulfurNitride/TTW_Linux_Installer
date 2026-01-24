@@ -50,6 +50,10 @@ tempfile = "3.10"
 sha1 = "0.10"
 hex = "0.4"
 
+# Platform-specific
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Path handling
 dirs = "5.0"
 
