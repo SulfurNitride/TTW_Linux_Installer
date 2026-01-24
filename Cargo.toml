@@ -1,9 +1,9 @@
 [package]
 name = "ttw_installer"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Tale of Two Wastelands Linux Installer"
-authors = ["TTW Team"]
+authors = ["Sulfur Nitride"]
 
 [dependencies]
 # BSA handling
@@ -48,6 +48,7 @@ tempfile = "3.10"
 
 # Hashing
 sha1 = "0.10"
+md-5 = "0.10"
 hex = "0.4"
 
 # Path handling

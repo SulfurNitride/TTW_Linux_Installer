@@ -361,7 +361,7 @@ impl AssetProcessor {
             // - Every 10 assets for medium packages (100-1000)
             // - Every asset for small packages (<100)
             let callback_interval = if total > 1000 { 50 } else if total > 100 { 10 } else { 1 };
-            if current % callback_interval == 0 || current == total || current <= 5 {
+            if current.is_multiple_of(callback_interval) || current == total || current <= 5 {
                 callback(current, total, &format!("Processing: {} OK, {} failed", s, f));
             }
         });

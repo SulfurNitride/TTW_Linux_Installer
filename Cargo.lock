@@ -2176,6 +2176,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3989,7 +3999,7 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 
 [[package]]
 name = "ttw_installer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "ba2",
@@ -4004,6 +4014,7 @@ dependencies = [
  "indicatif",
  "libc",
  "lz4_flex",
+ "md-5",
  "mp3lame-encoder",
  "rayon",
  "rfd",

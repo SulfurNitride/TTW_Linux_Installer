@@ -1,5 +1,6 @@
 use anyhow::{Result, Context, bail};
 use sha1::{Sha1, Digest};
+use md5::Md5;
 use std::path::{Path, PathBuf};
 use std::fs;
 
@@ -176,7 +177,7 @@ impl<'a> FileVerifier<'a> {
             }
         };
 
-        // Read file and compute SHA1
+        // Read file and compute hash
         let file_data = match fs::read(&file_path) {
             Ok(data) => data,
             Err(e) => {
@@ -193,18 +194,31 @@ impl<'a> FileVerifier<'a> {
             }
         };
 
-        let actual_hash = compute_sha1(&file_data);
-
         // Checksums can be separated by commas, newlines, or \r\n (multiple valid hashes for different versions)
         let valid_hashes: Vec<&str> = expected_checksums
-            .split(|c| c == ',' || c == '\n' || c == '\r')
+            .split([',', '\n', '\r'])
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
 
-        let matches = valid_hashes.iter().any(|expected| {
-            expected.eq_ignore_ascii_case(&actual_hash)
-        });
+        // Detect hash type based on expected hash length (MD5=32, SHA1=40)
+        // Compute both and check against appropriate one
+        let sha1_hash = compute_sha1(&file_data);
+        let md5_hash = compute_md5(&file_data);
+
+        let (actual_hash, matches) = if valid_hashes.iter().any(|h| h.len() == 32) {
+            // Expected hash is MD5 (32 chars)
+            let matches = valid_hashes.iter().any(|expected| {
+                expected.eq_ignore_ascii_case(&md5_hash)
+            });
+            (md5_hash, matches)
+        } else {
+            // Default to SHA1 (40 chars)
+            let matches = valid_hashes.iter().any(|expected| {
+                expected.eq_ignore_ascii_case(&sha1_hash)
+            });
+            (sha1_hash, matches)
+        };
 
         if matches != check.inverted {
             println!("  [{}] PASS: Checksum - {} ({})",
@@ -308,7 +322,7 @@ impl<'a> FileVerifier<'a> {
             || path_str.contains("programfiles")
             || path_str.contains("program files (x86)");
 
-        let expected_good = !check.inverted; // inverted=false means path should be good
+        let _expected_good = !check.inverted; // inverted=false means path should be good
 
         if is_problematic == check.inverted {
             // If inverted and problematic, or not inverted and not problematic = PASS
@@ -349,6 +363,14 @@ pub fn compute_sha1(data: &[u8]) -> String {
     hex::encode(result)
 }
 
+/// Compute MD5 hash of data and return as lowercase hex string
+pub fn compute_md5(data: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    hex::encode(result)
+}
+
 /// Compute SHA1 hash of a file
 pub fn compute_file_sha1(path: &Path) -> Result<String> {
     let data = fs::read(path)
@@ -383,7 +405,7 @@ fn get_available_space(path: &Path) -> Result<u64> {
             let stat = unsafe { stat.assume_init() };
             // f_bavail = blocks available to unprivileged users
             // f_frsize = fragment size (actual block size)
-            let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+            let available = stat.f_bavail * stat.f_frsize;
             Ok(available)
         } else {
             bail!("statvfs failed for {}", check_path.display())
