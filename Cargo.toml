@@ -86,3 +86,7 @@ path = "src/main.rs"
 [[bin]]
 name = "mpi_installer_gui"
 path = "src/gui.rs"
+
+[[bin]]
+name = "bsa_decompressor"
+path = "src/bsa_decompressor_cli.rs"
