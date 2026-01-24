@@ -2,6 +2,7 @@ use anyhow::{Result, Context, bail};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::process::Command;
+use tracing::info;
 
 /// Manages the xdelta3 binary for patch operations
 pub struct XdeltaManager {
@@ -13,6 +14,15 @@ impl XdeltaManager {
     /// Create manager with path to xdelta3 binary
     pub fn new(xdelta_path: PathBuf) -> Self {
         Self { xdelta_path }
+    }
+
+    /// Test if a binary actually works
+    fn test_binary(path: &Path) -> bool {
+        Command::new(path)
+            .arg("-V")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     /// Get default xdelta3 path (in tools directory)
@@ -29,6 +39,26 @@ impl XdeltaManager {
         exe_dir.join("tools").join(binary_name)
     }
 
+    /// Try to make a binary executable on Unix
+    #[cfg(unix)]
+    fn try_make_executable(path: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = fs::metadata(path) {
+            let mode = metadata.permissions().mode();
+            // Check if executable bit is set
+            if mode & 0o111 == 0 {
+                // Try to make it executable
+                info!("Setting execute permission on: {}", path.display());
+                let mut perms = metadata.permissions();
+                perms.set_mode(mode | 0o755);
+                if fs::set_permissions(path, perms).is_ok() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Try to find xdelta3 in common locations
     pub fn find_xdelta3() -> Option<PathBuf> {
         #[cfg(windows)]
@@ -36,42 +66,51 @@ impl XdeltaManager {
         #[cfg(not(windows))]
         let binary_name = "xdelta3";
 
-        // Check our tools directory (next to executable)
+        // First, try bundled xdelta3 in tools directory (next to executable)
         let tools_path = Self::default_path();
         if tools_path.exists() {
-            return Some(tools_path);
+            #[cfg(unix)]
+            Self::try_make_executable(&tools_path);
+
+            if Self::test_binary(&tools_path) {
+                info!("Using bundled xdelta3: {}", tools_path.display());
+                return Some(tools_path);
+            }
+            info!("Bundled xdelta3 at {} doesn't work, trying system xdelta3", tools_path.display());
         }
 
-        // Check tools directory relative to cwd
-        let cwd_tools = PathBuf::from("tools").join(binary_name);
-        if cwd_tools.exists() {
-            return Some(cwd_tools.canonicalize().unwrap_or(cwd_tools));
-        }
-
-        // Check parent directories (for running from target/release/)
-        if let Ok(exe_path) = std::env::current_exe() {
-            // Go up from target/release/ to project root
-            if let Some(exe_dir) = exe_path.parent() {
-                // Check ../../tools/xdelta3 (project root when in target/release/)
-                let project_tools = exe_dir.join("..").join("..").join("tools").join(binary_name);
-                if project_tools.exists() {
-                    return Some(project_tools.canonicalize().unwrap_or(project_tools));
+        // Second, try system-installed xdelta3 (most reliable on Linux)
+        #[cfg(not(windows))]
+        {
+            // Check common system locations directly first
+            for path in &["/usr/bin/xdelta3", "/usr/local/bin/xdelta3"] {
+                let p = PathBuf::from(path);
+                if p.exists() && Self::test_binary(&p) {
+                    info!("Using system xdelta3: {}", p.display());
+                    return Some(p);
                 }
-                // Check ../tools/xdelta3 (one level up)
-                let parent_tools = exe_dir.join("..").join("tools").join(binary_name);
-                if parent_tools.exists() {
-                    return Some(parent_tools.canonicalize().unwrap_or(parent_tools));
+            }
+
+            // Try 'which' command
+            if let Ok(output) = Command::new("which").arg("xdelta3").output() {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !path.is_empty() {
+                        let p = PathBuf::from(&path);
+                        if Self::test_binary(&p) {
+                            info!("Using xdelta3 from PATH: {}", path);
+                            return Some(p);
+                        }
+                    }
                 }
             }
         }
 
-        // Check system PATH using platform-appropriate command
         #[cfg(windows)]
         {
             // Use 'where' command on Windows
             if let Ok(output) = Command::new("where").arg("xdelta3.exe").output() {
                 if output.status.success() {
-                    // 'where' can return multiple lines, take the first one
                     let path = String::from_utf8_lossy(&output.stdout)
                         .lines()
                         .next()
@@ -79,45 +118,53 @@ impl XdeltaManager {
                         .trim()
                         .to_string();
                     if !path.is_empty() {
-                        return Some(PathBuf::from(path));
+                        let p = PathBuf::from(&path);
+                        if Self::test_binary(&p) {
+                            return Some(p);
+                        }
                     }
+                }
+            }
+
+            // Check common Windows locations
+            for path in &[
+                r"C:\Program Files\xdelta3\xdelta3.exe",
+                r"C:\Program Files (x86)\xdelta3\xdelta3.exe",
+                r"C:\xdelta3\xdelta3.exe",
+                r"C:\Tools\xdelta3.exe",
+            ] {
+                let p = PathBuf::from(path);
+                if p.exists() && Self::test_binary(&p) {
+                    return Some(p);
                 }
             }
         }
 
-        #[cfg(not(windows))]
-        {
-            // Use 'which' command on Unix
-            if let Ok(output) = Command::new("which").arg("xdelta3").output() {
-                if output.status.success() {
-                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !path.is_empty() {
-                        return Some(PathBuf::from(path));
-                    }
-                }
+        // Third, try tools directory relative to cwd (for development)
+        let cwd_tools = PathBuf::from("tools").join(binary_name);
+        if cwd_tools.exists() {
+            #[cfg(unix)]
+            Self::try_make_executable(&cwd_tools);
+
+            if Self::test_binary(&cwd_tools) {
+                return Some(cwd_tools.canonicalize().unwrap_or(cwd_tools));
             }
         }
 
-        // Check common locations (platform-specific)
-        #[cfg(windows)]
-        let common_paths: &[&str] = &[
-            r"C:\Program Files\xdelta3\xdelta3.exe",
-            r"C:\Program Files (x86)\xdelta3\xdelta3.exe",
-            r"C:\xdelta3\xdelta3.exe",
-            r"C:\Tools\xdelta3.exe",
-        ];
+        // Fourth, check parent directories (for running from target/release/)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                for rel_path in &["../../tools", "../tools"] {
+                    let p = exe_dir.join(rel_path).join(binary_name);
+                    if p.exists() {
+                        #[cfg(unix)]
+                        Self::try_make_executable(&p);
 
-        #[cfg(not(windows))]
-        let common_paths: &[&str] = &[
-            "/usr/bin/xdelta3",
-            "/usr/local/bin/xdelta3",
-            "/opt/xdelta3/xdelta3",
-        ];
-
-        for path in common_paths {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                return Some(p);
+                        if Self::test_binary(&p) {
+                            return Some(p.canonicalize().unwrap_or(p));
+                        }
+                    }
+                }
             }
         }
 
@@ -171,18 +218,28 @@ impl XdeltaManager {
     /// Apply a delta patch to create output file
     /// xdelta3 -d -s <source> <patch> <output>
     pub fn apply_patch(&self, source: &Path, patch: &Path, output: &Path) -> Result<()> {
-        let status = Command::new(&self.xdelta_path)
+        let result = Command::new(&self.xdelta_path)
             .arg("-d")
             .arg("-s")
             .arg(source)
             .arg(patch)
             .arg(output)
-            .status()
-            .with_context(|| format!("Failed to run xdelta3 patch: {} -> {}",
-                patch.display(), output.display()))?;
+            .output()
+            .with_context(|| format!("Failed to execute xdelta3 (path: {})",
+                self.xdelta_path.display()))?;
 
-        if !status.success() {
-            bail!("xdelta3 patch failed with status: {}", status);
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            bail!(
+                "xdelta3 patch failed (status {}): {}\nSource: {}\nPatch: {}\nstdout: {}\nstderr: {}",
+                result.status,
+                if stderr.is_empty() { "no error message" } else { stderr.trim() },
+                source.display(),
+                patch.display(),
+                stdout.trim(),
+                stderr.trim()
+            );
         }
 
         Ok(())

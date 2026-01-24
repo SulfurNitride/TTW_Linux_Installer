@@ -42,6 +42,9 @@ clap = { version = "4.0", features = ["derive"] }
 # Parallel processing
 rayon = "1.10"
 
+# System info (for memory detection)
+sysinfo = "0.35"
+
 # File utilities
 walkdir = "2.5"
 tempfile = "3.10"

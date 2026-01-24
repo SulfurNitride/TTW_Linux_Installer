@@ -34,8 +34,10 @@ impl Logger {
         let (non_blocking, guard) = tracing_appender::non_blocking(file);
 
         // Set up subscriber with both console and file output
+        // Default to WARN for external crates, INFO for our crate
+        // This suppresses noisy INFO logs from symphonia/lewton audio libraries
         let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+            .unwrap_or_else(|_| EnvFilter::new("warn,ttw_installer=info"));
 
         // File layer - detailed output
         let file_layer = fmt::layer()
@@ -74,8 +76,9 @@ impl Logger {
 
     /// Initialize a simple console-only logger (for commands that don't need file logging)
     pub fn init_console_only() -> Result<()> {
+        // Default to WARN for external crates, INFO for our crate
         let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+            .unwrap_or_else(|_| EnvFilter::new("warn,ttw_installer=info"));
 
         tracing_subscriber::registry()
             .with(env_filter)

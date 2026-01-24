@@ -2,10 +2,11 @@ use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use tracing::{warn, info};
 
 use crate::models::{Asset, Location};
 use crate::services::{
@@ -127,6 +128,12 @@ pub struct AssetProcessor {
     resolver: Arc<LocationResolver>,
     bsa_handler: Arc<Mutex<BsaHandler>>,
     bsa_writer: Arc<Mutex<BsaWriterManager>>,
+    /// Smart cache for pre-extracted BSA files (uses RwLock for concurrent reads)
+    bsa_cache: Arc<RwLock<HashMap<(PathBuf, String), Vec<u8>>>>,
+    /// Cache memory tracking
+    cache_size: AtomicUsize,
+    /// Maximum cache size (detected from system RAM)
+    max_cache_size: usize,
     xdelta: Arc<XdeltaManager>,
     mpi_dir: PathBuf,
     dest_dir: PathBuf,
@@ -228,10 +235,20 @@ impl AssetProcessor {
             }
         }
 
+        // Detect system RAM and set cache limits
+        let max_cache_size = Self::detect_cache_limit();
+        info!(
+            "BSA extraction cache limit: {:.1} GB",
+            max_cache_size as f64 / 1024.0 / 1024.0 / 1024.0
+        );
+
         Self {
             resolver: Arc::new(resolver),
             bsa_handler: Arc::new(Mutex::new(BsaHandler::new())),
             bsa_writer: Arc::new(Mutex::new(bsa_writer)),
+            bsa_cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_size: AtomicUsize::new(0),
+            max_cache_size,
             xdelta: Arc::new(xdelta),
             mpi_dir,
             dest_dir,
@@ -244,7 +261,128 @@ impl AssetProcessor {
         self
     }
 
-    /// Process a list of assets in parallel
+    /// Detect cache limit based on system RAM
+    /// Returns 80% of total system RAM
+    fn detect_cache_limit() -> usize {
+        use sysinfo::System;
+
+        let mut sys = System::new_all();
+        sys.refresh_memory();
+        let system_ram = sys.total_memory(); // in bytes
+
+        // Use 80% of system RAM as hard limit
+        ((system_ram as f64) * 0.8) as usize
+    }
+
+    /// Pre-extract files from a BSA into the cache
+    /// Returns (files_extracted, bytes_used)
+    fn pre_extract_bsa_files(
+        &self,
+        bsa_path: &Path,
+        file_paths: &[&str],
+    ) -> Result<(usize, usize)> {
+        use ba2::tes4::{Archive, ArchiveKey, DirectoryKey, File as BsaFile};
+        use ba2::{ByteSlice, Reader};
+        use std::collections::HashSet;
+
+        // Open BSA once
+        let (archive, _): (Archive, _) = Archive::read(bsa_path)
+            .with_context(|| format!("Failed to open BSA for pre-extraction: {}", bsa_path.display()))?;
+
+        // Build set of needed paths (normalized to lowercase with backslashes)
+        let needed: HashSet<String> = file_paths.iter()
+            .map(|p| p.replace('/', "\\").to_lowercase())
+            .collect();
+
+        let mut extracted = 0;
+        let mut bytes_used = 0;
+        let bsa_pathbuf = bsa_path.to_path_buf();
+
+        // Iterate through archive and extract matching files
+        for (dir_key, folder) in archive.iter() {
+            let dir_key: &ArchiveKey = dir_key;
+            let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes()).to_lowercase();
+
+            for (file_key, file) in folder.iter() {
+                let file_key: &DirectoryKey = file_key;
+                let file: &BsaFile = file;
+                let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_lowercase();
+                let full_path = if dir_name.is_empty() || dir_name == "." {
+                    file_name.clone()
+                } else {
+                    format!("{}\\{}", dir_name, file_name)
+                };
+
+                if needed.contains(&full_path) {
+                    // Extract file data
+                    let data = if file.is_compressed() {
+                        file.decompress(&Default::default())?.as_bytes().to_vec()
+                    } else {
+                        file.as_bytes().to_vec()
+                    };
+
+                    let data_size = data.len();
+
+                    // Strictly enforce cache limit using compare-and-swap
+                    loop {
+                        let current_size = self.cache_size.load(Ordering::Acquire);
+                        let new_size = current_size + data_size;
+
+                        if new_size > self.max_cache_size {
+                            // Would exceed limit - stop extraction
+                            info!(
+                                "BSA cache limit reached ({:.1}/{:.1} GB), stopping pre-extraction",
+                                current_size as f64 / 1024.0 / 1024.0 / 1024.0,
+                                self.max_cache_size as f64 / 1024.0 / 1024.0 / 1024.0
+                            );
+                            return Ok((extracted, bytes_used));
+                        }
+
+                        // Try to atomically reserve space
+                        match self.cache_size.compare_exchange_weak(
+                            current_size,
+                            new_size,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break, // Successfully reserved space
+                            Err(_) => continue, // Another thread changed it, retry
+                        }
+                    }
+
+                    // Find original path case from file_paths
+                    let original_path = file_paths.iter()
+                        .find(|p| p.replace('/', "\\").to_lowercase() == full_path)
+                        .map(|s| s.to_string())
+                        .unwrap_or(full_path);
+
+                    // Add to cache (space already reserved atomically above)
+                    {
+                        let mut cache = self.bsa_cache.write().unwrap();
+                        cache.insert((bsa_pathbuf.clone(), original_path), data);
+                    }
+                    extracted += 1;
+                    bytes_used += data_size;
+                }
+            }
+        }
+
+        Ok((extracted, bytes_used))
+    }
+
+    /// Clear the BSA extraction cache
+    fn clear_bsa_cache(&self) {
+        let mut cache = self.bsa_cache.write().unwrap();
+        cache.clear();
+        self.cache_size.store(0, Ordering::Relaxed);
+    }
+
+    /// Get cache size in bytes
+    fn cache_size_bytes(&self) -> usize {
+        self.cache_size.load(Ordering::Relaxed)
+    }
+
+    /// Process a list of assets in parallel with smart BSA caching
     pub fn process_assets(&self, assets: &[Asset]) -> Result<ProcessingStats> {
         // Group assets by operation type for progress display
         let mut by_type: HashMap<i32, Vec<&Asset>> = HashMap::new();
@@ -260,7 +398,71 @@ impl AssetProcessor {
             println!("  {} ({}): {}", name, op_type, group.len());
         }
 
-        // Thread-safe counters
+        // === PHASE 1: Pre-extract BSA files into cache ===
+        // Group assets by source BSA to minimize re-opening
+        let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
+        let mut non_bsa_assets: Vec<&Asset> = Vec::new();
+
+        for asset in assets {
+            if self.resolver.is_bsa_location(asset.source_loc) {
+                if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
+                    bsa_assets.entry(bsa_path).or_default().push(asset);
+                }
+            } else {
+                non_bsa_assets.push(asset);
+            }
+        }
+
+        // Sort BSAs by number of assets (process largest first)
+        let mut bsa_order: Vec<_> = bsa_assets.keys().cloned().collect();
+        bsa_order.sort_by(|a, b| {
+            bsa_assets.get(b).map(|v| v.len()).unwrap_or(0)
+                .cmp(&bsa_assets.get(a).map(|v| v.len()).unwrap_or(0))
+        });
+
+        println!("\n=== Pre-extracting from {} BSA archives (parallel) ===", bsa_order.len());
+
+        // Pre-extract from all BSAs in parallel
+        let extraction_results: Vec<_> = bsa_order.par_iter().filter_map(|bsa_path| {
+            // Check cache limit before starting
+            if self.cache_size_bytes() >= self.max_cache_size {
+                return None;
+            }
+
+            let assets_from_bsa = bsa_assets.get(bsa_path)?;
+            let file_paths: Vec<&str> = assets_from_bsa.iter()
+                .map(|a| a.source_path.as_str())
+                .collect();
+
+            let bsa_name = bsa_path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            match self.pre_extract_bsa_files(bsa_path, &file_paths) {
+                Ok((extracted, bytes)) => {
+                    info!("Pre-extracted {} from {} ({:.1} MB)", extracted, bsa_name, bytes as f64 / 1024.0 / 1024.0);
+                    Some((bsa_name, extracted, bytes, true))
+                }
+                Err(e) => {
+                    warn!("Failed to pre-extract {}: {}", bsa_name, e);
+                    Some((bsa_name, 0, 0, false))
+                }
+            }
+        }).collect();
+
+        let total_pre_extracted: usize = extraction_results.iter().map(|(_, e, _, _)| e).sum();
+        let total_bytes: usize = extraction_results.iter().map(|(_, _, b, _)| b).sum();
+        let successful = extraction_results.iter().filter(|(_, _, _, ok)| *ok).count();
+
+        println!(
+            "Pre-extraction complete: {} files from {}/{} BSAs, {:.1} GB cached\n",
+            total_pre_extracted,
+            successful,
+            bsa_order.len(),
+            total_bytes as f64 / 1024.0 / 1024.0 / 1024.0
+        );
+
+        // === PHASE 2: Process all assets in parallel ===
         let success = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -271,7 +473,7 @@ impl AssetProcessor {
             .unwrap()
             .progress_chars("#>-"));
 
-        // Process assets in parallel
+        // Process assets in parallel (cache hits will be fast, misses fall back to direct extraction)
         assets.par_iter().for_each(|asset| {
             let result = self.process_asset(asset);
 
@@ -281,12 +483,14 @@ impl AssetProcessor {
                 }
                 Err(e) => {
                     failed.fetch_add(1, Ordering::Relaxed);
+                    let error_msg = format!(
+                        "{} (op={}): {}",
+                        asset.source_path, asset.op_type, e
+                    );
+                    warn!("Asset failed: {}", error_msg);
                     let mut errs = errors.lock().unwrap();
-                    if errs.len() < 10 {
-                        errs.push(format!(
-                            "{} ({}): {}",
-                            asset.source_path, asset.op_type, e
-                        ));
+                    if errs.len() < 100 {
+                        errs.push(error_msg);
                     }
                 }
             }
@@ -296,6 +500,9 @@ impl AssetProcessor {
             let f = failed.load(Ordering::Relaxed);
             pb.set_message(format!("OK:{} Fail:{}", s, f));
         });
+
+        // Clear cache after processing
+        self.clear_bsa_cache();
 
         let final_success = success.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
@@ -326,13 +533,51 @@ impl AssetProcessor {
         let total = assets.len();
         let callback = Arc::new(callback);
 
-        // Thread-safe counters
+        // === PHASE 1: Pre-extract BSA files into cache ===
+        callback(0, total, "Pre-extracting BSA files...");
+
+        let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
+        for asset in assets {
+            if self.resolver.is_bsa_location(asset.source_loc) {
+                if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
+                    bsa_assets.entry(bsa_path).or_default().push(asset);
+                }
+            }
+        }
+
+        // Sort BSAs by number of assets (process largest first)
+        let mut bsa_order: Vec<_> = bsa_assets.keys().cloned().collect();
+        bsa_order.sort_by(|a, b| {
+            bsa_assets.get(b).map(|v| v.len()).unwrap_or(0)
+                .cmp(&bsa_assets.get(a).map(|v| v.len()).unwrap_or(0))
+        });
+
+        // Pre-extract from all BSAs in parallel
+        callback(0, total, &format!("Pre-extracting from {} BSAs (parallel)...", bsa_order.len()));
+
+        let extraction_results: Vec<_> = bsa_order.par_iter().filter_map(|bsa_path| {
+            if self.cache_size_bytes() >= self.max_cache_size {
+                return None;
+            }
+
+            let assets_from_bsa = bsa_assets.get(bsa_path)?;
+            let file_paths: Vec<&str> = assets_from_bsa.iter()
+                .map(|a| a.source_path.as_str())
+                .collect();
+
+            self.pre_extract_bsa_files(bsa_path, &file_paths).ok()
+        }).collect();
+
+        let total_pre_extracted: usize = extraction_results.iter().map(|(e, _)| e).sum();
+
+        callback(0, total, &format!("Pre-extracted {} files, processing...", total_pre_extracted));
+
+        // === PHASE 2: Process all assets in parallel ===
         let success = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
         let processed = AtomicUsize::new(0);
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-        // Process assets in parallel
         assets.par_iter().for_each(|asset| {
             let result = self.process_asset(asset);
 
@@ -342,12 +587,14 @@ impl AssetProcessor {
                 }
                 Err(e) => {
                     failed.fetch_add(1, Ordering::Relaxed);
+                    let error_msg = format!(
+                        "{} (op={}): {}",
+                        asset.source_path, asset.op_type, e
+                    );
+                    warn!("Asset failed: {}", error_msg);
                     let mut errs = errors.lock().unwrap();
-                    if errs.len() < 50 {
-                        errs.push(format!(
-                            "{} ({}): {}",
-                            asset.source_path, asset.op_type, e
-                        ));
+                    if errs.len() < 100 {
+                        errs.push(error_msg);
                     }
                 }
             }
@@ -356,15 +603,14 @@ impl AssetProcessor {
             let s = success.load(Ordering::Relaxed);
             let f = failed.load(Ordering::Relaxed);
 
-            // Call progress callback frequently enough for responsive UI
-            // - Every 50 assets for large packages
-            // - Every 10 assets for medium packages (100-1000)
-            // - Every asset for small packages (<100)
             let callback_interval = if total > 1000 { 50 } else if total > 100 { 10 } else { 1 };
             if current.is_multiple_of(callback_interval) || current == total || current <= 5 {
                 callback(current, total, &format!("Processing: {} OK, {} failed", s, f));
             }
         });
+
+        // Clear cache after processing
+        self.clear_bsa_cache();
 
         let final_success = success.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
@@ -497,11 +743,20 @@ impl AssetProcessor {
         Ok(())
     }
 
-    /// Get source data, either from BSA or directory
+    /// Get source data, either from cache, BSA, or directory
     fn get_source_data(&self, asset: &Asset) -> Result<Vec<u8>> {
         if self.resolver.is_bsa_location(asset.source_loc) {
-            // Extract from BSA (thread-safe with mutex)
             let bsa_path = self.resolver.get_bsa_path(asset.source_loc)?;
+
+            // First, check the cache (read lock - allows concurrent reads)
+            {
+                let cache = self.bsa_cache.read().unwrap();
+                if let Some(data) = cache.get(&(bsa_path.clone(), asset.source_path.clone())) {
+                    return Ok(data.clone());
+                }
+            }
+
+            // Not in cache - extract directly (fallback, slower path)
             let mut handler = self.bsa_handler.lock().unwrap();
             handler.extract_file(&bsa_path, &asset.source_path)
         } else {
