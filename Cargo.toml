@@ -87,6 +87,7 @@ path = "src/mpi_installer/cli.rs"
 name = "mpi_installer_gui"
 path = "src/mpi_installer/gui.rs"
 
+# BSA Decompressor
 [[bin]]
 name = "bsa_decompressor"
 path = "src/bsa_decompressor/cli.rs"

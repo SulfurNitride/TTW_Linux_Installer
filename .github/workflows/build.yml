@@ -48,10 +48,14 @@ jobs:
         mkdir -p release/tools
         cp target/release/mpi_installer release/
         cp target/release/mpi_installer_gui release/
+        cp target/release/bsa_decompressor release/
+        cp target/release/bsa_decompressor_gui release/
         cp /usr/bin/xdelta3 release/tools/
         chmod +x release/tools/xdelta3
         chmod +x release/mpi_installer
         chmod +x release/mpi_installer_gui
+        chmod +x release/bsa_decompressor
+        chmod +x release/bsa_decompressor_gui
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -105,6 +109,8 @@ jobs:
         New-Item -ItemType Directory -Force -Path release\tools
         Copy-Item target\release\mpi_installer.exe release\
         Copy-Item target\release\mpi_installer_gui.exe release\
+        Copy-Item target\release\bsa_decompressor.exe release\
+        Copy-Item target\release\bsa_decompressor_gui.exe release\
         Copy-Item xdelta3.exe release\tools\
       shell: pwsh
 
