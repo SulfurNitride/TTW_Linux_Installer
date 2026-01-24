@@ -12,7 +12,7 @@ use ttw_installer::{
     models::InstallConfig,
     services::{
         MpiExtractor, ManifestLoader, LocationResolver,
-        AssetProcessor, XdeltaManager,
+        AssetProcessor, XdeltaManager, FileVerifier,
     },
 };
 
@@ -489,6 +489,27 @@ fn run_installation(
 
     let resolver = LocationResolver::new(locations.clone(), config)
         .with_variables(&variables);
+
+    // Run pre-installation checks (hash verification, file existence, etc.)
+    let checks = ManifestLoader::get_checks(&manifest);
+    if !checks.is_empty() {
+        log(&format!("Running {} pre-installation checks...", checks.len()));
+        let verifier = FileVerifier::new(&resolver);
+        let verification_result = verifier.run_checks(&checks)
+            .map_err(|e| format!("Verification error: {}", e))?;
+
+        if !verification_result.is_success() {
+            for err in &verification_result.errors {
+                log(&format!("CHECK FAILED: {}", err));
+            }
+            return Err(format!(
+                "Verification failed: {} checks failed. Please ensure you have valid, unmodified game files.",
+                verification_result.failed
+            ));
+        }
+        log(&format!("All {} checks passed", verification_result.passed));
+    }
+    progress.store(1200, Ordering::Relaxed); // 12%
 
     log("Checking xdelta3...");
     let xdelta = XdeltaManager::ensure_available()

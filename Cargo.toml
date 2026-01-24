@@ -48,6 +48,7 @@ tempfile = "3.10"
 
 # Hashing
 sha1 = "0.10"
+hex = "0.4"
 
 # Path handling
 dirs = "5.0"

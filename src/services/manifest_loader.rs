@@ -201,6 +201,11 @@ impl ManifestLoader {
         Ok(Vec::new())
     }
 
+    /// Get pre-installation checks from manifest
+    pub fn get_checks(manifest: &TtwManifest) -> Vec<crate::models::Check> {
+        manifest.checks.clone().unwrap_or_default()
+    }
+
     /// Get post-installation commands from manifest
     pub fn get_post_commands(manifest: &TtwManifest) -> Vec<crate::models::PostCommand> {
         manifest.post_commands.clone().unwrap_or_default()
