@@ -69,8 +69,7 @@ impl DecompressGame {
     /// Get BSA version for this game
     pub fn bsa_version(&self) -> Version {
         match self {
-            Self::Fallout3 | Self::FalloutNV => Version::v104,
-            Self::Oblivion => Version::v103,
+            Self::Fallout3 | Self::FalloutNV | Self::Oblivion => Version::v104,
         }
     }
 }
