@@ -195,9 +195,9 @@ impl<'a> FileVerifier<'a> {
 
         let actual_hash = compute_sha1(&file_data);
 
-        // Checksums can be comma-separated (multiple valid hashes for different versions)
+        // Checksums can be separated by commas, newlines, or \r\n (multiple valid hashes for different versions)
         let valid_hashes: Vec<&str> = expected_checksums
-            .split(',')
+            .split(|c| c == ',' || c == '\n' || c == '\r')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
