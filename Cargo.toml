@@ -87,11 +87,12 @@ path = "src/mpi_installer/cli.rs"
 name = "mpi_installer_gui"
 path = "src/mpi_installer/gui.rs"
 
-# BSA Decompressor
-[[bin]]
-name = "bsa_decompressor"
-path = "src/bsa_decompressor/cli.rs"
-
-[[bin]]
-name = "bsa_decompressor_gui"
-path = "src/bsa_decompressor/gui.rs"
+# BSA Decompressor - frozen, not built by default
+# Uncomment to build:
+# [[bin]]
+# name = "bsa_decompressor"
+# path = "src/bsa_decompressor/cli.rs"
+#
+# [[bin]]
+# name = "bsa_decompressor_gui"
+# path = "src/bsa_decompressor/gui.rs"
