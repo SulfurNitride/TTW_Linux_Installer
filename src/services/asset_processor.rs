@@ -2,7 +2,7 @@ use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -11,6 +11,7 @@ use tracing::{warn, info};
 use crate::models::{Asset, Location};
 use crate::services::{
     LocationResolver, BsaHandler, BsaWriterManager, AudioProcessor, AudioFormat, XdeltaManager,
+    BsaCache,
 };
 
 /// Find a file with case-insensitive matching (for Linux compatibility)
@@ -128,12 +129,8 @@ pub struct AssetProcessor {
     resolver: Arc<LocationResolver>,
     bsa_handler: Arc<Mutex<BsaHandler>>,
     bsa_writer: Arc<Mutex<BsaWriterManager>>,
-    /// Smart cache for pre-extracted BSA files (uses RwLock for concurrent reads)
-    bsa_cache: Arc<RwLock<HashMap<(PathBuf, String), Vec<u8>>>>,
-    /// Cache memory tracking
-    cache_size: AtomicUsize,
-    /// Maximum cache size (detected from system RAM)
-    max_cache_size: usize,
+    /// SQLite-based cache for pre-extracted BSA files (disk-based, low RAM usage)
+    bsa_cache: Arc<BsaCache>,
     xdelta: Arc<XdeltaManager>,
     mpi_dir: PathBuf,
     dest_dir: PathBuf,
@@ -235,20 +232,15 @@ impl AssetProcessor {
             }
         }
 
-        // Detect system RAM and set cache limits
-        let max_cache_size = Self::detect_cache_limit();
-        info!(
-            "BSA extraction cache limit: {:.1} GB",
-            max_cache_size as f64 / 1024.0 / 1024.0 / 1024.0
-        );
+        // Create SQLite-based cache (uses disk instead of RAM)
+        let bsa_cache = BsaCache::new()
+            .expect("Failed to create SQLite BSA cache");
 
         Self {
             resolver: Arc::new(resolver),
             bsa_handler: Arc::new(Mutex::new(BsaHandler::new())),
             bsa_writer: Arc::new(Mutex::new(bsa_writer)),
-            bsa_cache: Arc::new(RwLock::new(HashMap::new())),
-            cache_size: AtomicUsize::new(0),
-            max_cache_size,
+            bsa_cache: Arc::new(bsa_cache),
             xdelta: Arc::new(xdelta),
             mpi_dir,
             dest_dir,
@@ -261,20 +253,7 @@ impl AssetProcessor {
         self
     }
 
-    /// Detect cache limit based on system RAM
-    /// Returns 80% of total system RAM
-    fn detect_cache_limit() -> usize {
-        use sysinfo::System;
-
-        let mut sys = System::new_all();
-        sys.refresh_memory();
-        let system_ram = sys.total_memory(); // in bytes
-
-        // Use 80% of system RAM as hard limit
-        ((system_ram as f64) * 0.8) as usize
-    }
-
-    /// Pre-extract files from a BSA into the cache
+    /// Pre-extract files from a BSA into the SQLite cache
     /// Returns (files_extracted, bytes_used)
     fn pre_extract_bsa_files(
         &self,
@@ -294,9 +273,13 @@ impl AssetProcessor {
             .map(|p| p.replace('/', "\\").to_lowercase())
             .collect();
 
-        let mut extracted = 0;
-        let mut bytes_used = 0;
-        let bsa_pathbuf = bsa_path.to_path_buf();
+        // Build lookup map for original path casing
+        let path_lookup: HashMap<String, &str> = file_paths.iter()
+            .map(|p| (p.replace('/', "\\").to_lowercase(), *p))
+            .collect();
+
+        // Collect all matching files for batch insert
+        let mut files_to_cache: Vec<(String, Vec<u8>)> = Vec::new();
 
         // Iterate through archive and extract matching files
         for (dir_key, folder) in archive.iter() {
@@ -321,65 +304,27 @@ impl AssetProcessor {
                         file.as_bytes().to_vec()
                     };
 
-                    let data_size = data.len();
-
-                    // Strictly enforce cache limit using compare-and-swap
-                    loop {
-                        let current_size = self.cache_size.load(Ordering::Acquire);
-                        let new_size = current_size + data_size;
-
-                        if new_size > self.max_cache_size {
-                            // Would exceed limit - stop extraction
-                            info!(
-                                "BSA cache limit reached ({:.1}/{:.1} GB), stopping pre-extraction",
-                                current_size as f64 / 1024.0 / 1024.0 / 1024.0,
-                                self.max_cache_size as f64 / 1024.0 / 1024.0 / 1024.0
-                            );
-                            return Ok((extracted, bytes_used));
-                        }
-
-                        // Try to atomically reserve space
-                        match self.cache_size.compare_exchange_weak(
-                            current_size,
-                            new_size,
-                            Ordering::AcqRel,
-                            Ordering::Relaxed,
-                        ) {
-                            Ok(_) => break, // Successfully reserved space
-                            Err(_) => continue, // Another thread changed it, retry
-                        }
-                    }
-
-                    // Find original path case from file_paths
-                    let original_path = file_paths.iter()
-                        .find(|p| p.replace('/', "\\").to_lowercase() == full_path)
+                    // Find original path case from lookup
+                    let original_path = path_lookup.get(&full_path)
                         .map(|s| s.to_string())
                         .unwrap_or(full_path);
 
-                    // Add to cache (space already reserved atomically above)
-                    {
-                        let mut cache = self.bsa_cache.write().unwrap();
-                        cache.insert((bsa_pathbuf.clone(), original_path), data);
-                    }
-                    extracted += 1;
-                    bytes_used += data_size;
+                    files_to_cache.push((original_path, data));
                 }
             }
         }
 
-        Ok((extracted, bytes_used))
+        // Batch insert into SQLite (much faster than individual inserts)
+        let (count, bytes) = self.bsa_cache.insert_batch(bsa_path, files_to_cache)?;
+
+        Ok((count, bytes))
     }
 
     /// Clear the BSA extraction cache
     fn clear_bsa_cache(&self) {
-        let mut cache = self.bsa_cache.write().unwrap();
-        cache.clear();
-        self.cache_size.store(0, Ordering::Relaxed);
-    }
-
-    /// Get cache size in bytes
-    fn cache_size_bytes(&self) -> usize {
-        self.cache_size.load(Ordering::Relaxed)
+        if let Err(e) = self.bsa_cache.clear() {
+            warn!("Failed to clear BSA cache: {}", e);
+        }
     }
 
     /// Process a list of assets in parallel with smart BSA caching
@@ -420,15 +365,10 @@ impl AssetProcessor {
                 .cmp(&bsa_assets.get(a).map(|v| v.len()).unwrap_or(0))
         });
 
-        println!("\n=== Pre-extracting from {} BSA archives (parallel) ===", bsa_order.len());
+        println!("\n=== Pre-extracting from {} BSA archives (SQLite cache) ===", bsa_order.len());
 
-        // Pre-extract from all BSAs in parallel
-        let extraction_results: Vec<_> = bsa_order.par_iter().filter_map(|bsa_path| {
-            // Check cache limit before starting
-            if self.cache_size_bytes() >= self.max_cache_size {
-                return None;
-            }
-
+        // Pre-extract from all BSAs (sequential for SQLite - parallel writes would cause contention)
+        let extraction_results: Vec<_> = bsa_order.iter().filter_map(|bsa_path| {
             let assets_from_bsa = bsa_assets.get(bsa_path)?;
             let file_paths: Vec<&str> = assets_from_bsa.iter()
                 .map(|a| a.source_path.as_str())
@@ -453,13 +393,15 @@ impl AssetProcessor {
         let total_pre_extracted: usize = extraction_results.iter().map(|(_, e, _, _)| e).sum();
         let total_bytes: usize = extraction_results.iter().map(|(_, _, b, _)| b).sum();
         let successful = extraction_results.iter().filter(|(_, _, _, ok)| *ok).count();
+        let db_size = self.bsa_cache.db_size_bytes();
 
         println!(
-            "Pre-extraction complete: {} files from {}/{} BSAs, {:.1} GB cached\n",
+            "Pre-extraction complete: {} files from {}/{} BSAs ({:.1} GB data, {:.1} MB SQLite DB)\n",
             total_pre_extracted,
             successful,
             bsa_order.len(),
-            total_bytes as f64 / 1024.0 / 1024.0 / 1024.0
+            total_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
+            db_size as f64 / 1024.0 / 1024.0
         );
 
         // === PHASE 2: Process all assets in parallel ===
@@ -552,14 +494,10 @@ impl AssetProcessor {
                 .cmp(&bsa_assets.get(a).map(|v| v.len()).unwrap_or(0))
         });
 
-        // Pre-extract from all BSAs in parallel
-        callback(0, total, &format!("Pre-extracting from {} BSAs (parallel)...", bsa_order.len()));
+        // Pre-extract from all BSAs (sequential for SQLite cache)
+        callback(0, total, &format!("Pre-extracting from {} BSAs (SQLite cache)...", bsa_order.len()));
 
-        let extraction_results: Vec<_> = bsa_order.par_iter().filter_map(|bsa_path| {
-            if self.cache_size_bytes() >= self.max_cache_size {
-                return None;
-            }
-
+        let extraction_results: Vec<_> = bsa_order.iter().filter_map(|bsa_path| {
             let assets_from_bsa = bsa_assets.get(bsa_path)?;
             let file_paths: Vec<&str> = assets_from_bsa.iter()
                 .map(|a| a.source_path.as_str())
@@ -743,17 +681,14 @@ impl AssetProcessor {
         Ok(())
     }
 
-    /// Get source data, either from cache, BSA, or directory
+    /// Get source data, either from SQLite cache, BSA, or directory
     fn get_source_data(&self, asset: &Asset) -> Result<Vec<u8>> {
         if self.resolver.is_bsa_location(asset.source_loc) {
             let bsa_path = self.resolver.get_bsa_path(asset.source_loc)?;
 
-            // First, check the cache (read lock - allows concurrent reads)
-            {
-                let cache = self.bsa_cache.read().unwrap();
-                if let Some(data) = cache.get(&(bsa_path.clone(), asset.source_path.clone())) {
-                    return Ok(data.clone());
-                }
+            // First, check the SQLite cache
+            if let Some(data) = self.bsa_cache.get(&bsa_path, &asset.source_path)? {
+                return Ok(data);
             }
 
             // Not in cache - extract directly (fallback, slower path)

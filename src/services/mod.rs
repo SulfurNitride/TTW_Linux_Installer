@@ -7,6 +7,7 @@ mod asset_processor;
 mod xdelta_manager;
 mod logger;
 mod file_verifier;
+mod bsa_cache;
 
 pub use mpi_extractor::*;
 pub use manifest_loader::*;
@@ -17,3 +18,4 @@ pub use asset_processor::*;
 pub use xdelta_manager::*;
 pub use logger::*;
 pub use file_verifier::*;
+pub use bsa_cache::*;

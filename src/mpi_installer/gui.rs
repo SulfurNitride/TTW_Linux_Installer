@@ -65,18 +65,12 @@ impl UserConfig {
     }
 }
 
-/// Get log file path (uses platform-appropriate data directory)
+/// Get log file path (stores next to executable for easy access)
 fn get_log_path(package_name: &str) -> PathBuf {
-    // Linux: ~/.local/share/mpi_installer/logs/
-    // Windows: %LOCALAPPDATA%\mpi_installer\logs\
-    let logs_dir = if let Some(data_dir) = dirs::data_local_dir() {
-        data_dir.join("mpi_installer").join("logs")
-    } else {
-        // Fallback: next to executable
-        std::env::current_exe()
-            .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("logs"))
-            .unwrap_or_else(|_| PathBuf::from("logs"))
-    };
+    // Store logs next to the executable for easy user access
+    let logs_dir = std::env::current_exe()
+        .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("logs"))
+        .unwrap_or_else(|_| PathBuf::from("logs"));
 
     let _ = fs::create_dir_all(&logs_dir);
 

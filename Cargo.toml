@@ -73,6 +73,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2.4"
 chrono = "0.4"
 
+# SQLite for BSA caching (reduces RAM usage)
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # GUI
 eframe = "0.33.3"
 egui = "0.33.3"
