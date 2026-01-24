@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
-use ttw_installer::services::{BsaDecompressor, DecompressGame};
+use ttw_installer::bsa_decompressor::{BsaDecompressor, DecompressGame};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Game {

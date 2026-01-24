@@ -81,12 +81,16 @@ libc = "0.2"
 
 [[bin]]
 name = "mpi_installer"
-path = "src/main.rs"
+path = "src/mpi_installer/cli.rs"
 
 [[bin]]
 name = "mpi_installer_gui"
-path = "src/gui.rs"
+path = "src/mpi_installer/gui.rs"
 
 [[bin]]
 name = "bsa_decompressor"
-path = "src/bsa_decompressor_cli.rs"
+path = "src/bsa_decompressor/cli.rs"
+
+[[bin]]
+name = "bsa_decompressor_gui"
+path = "src/bsa_decompressor/gui.rs"

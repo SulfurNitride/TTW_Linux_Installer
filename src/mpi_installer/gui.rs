@@ -13,7 +13,6 @@ use ttw_installer::{
     services::{
         MpiExtractor, ManifestLoader, LocationResolver,
         AssetProcessor, XdeltaManager, FileVerifier,
-        BsaDecompressor, DecompressGame,
     },
 };
 
@@ -116,35 +115,20 @@ enum InstallStatus {
     Failed(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActiveTab {
-    Installer,
-    Decompressor,
-}
-
 struct MpiInstallerApp {
-    // Active tab
-    active_tab: ActiveTab,
-
-    // Path inputs (Installer)
+    // Path inputs
     fo3_path: String,
     fnv_path: String,
     oblivion_path: String,
     mpi_path: String,
     output_path: String,
 
-    // Decompressor settings
-    decompress_game: usize,  // 0=FO3, 1=FNV, 2=Oblivion
-    decompress_path: String,
-    decompress_output: String,
-    decompress_backup: bool,
-
     // State
     status: InstallStatus,
     progress: Arc<AtomicU32>,  // Progress as percentage * 100 (0-10000 for 0.00%-100.00%)
     log_messages: Arc<Mutex<Vec<String>>>,
 
-    // Installation/Decompression thread handle
+    // Installation thread handle
     install_thread: Option<thread::JoinHandle<Result<(), String>>>,
 }
 
@@ -154,16 +138,11 @@ impl Default for MpiInstallerApp {
         let config = UserConfig::load();
 
         Self {
-            active_tab: ActiveTab::Installer,
             fo3_path: config.fo3_path.clone(),
             fnv_path: config.fnv_path.clone(),
             oblivion_path: config.oblivion_path.clone(),
             mpi_path: String::new(), // Don't save MPI path - it changes per install
             output_path: config.output_path,
-            decompress_game: 0,
-            decompress_path: String::new(),
-            decompress_output: String::new(),
-            decompress_backup: true,
             status: InstallStatus::Ready,
             progress: Arc::new(AtomicU32::new(0)),
             log_messages: Arc::new(Mutex::new(vec!["Ready".to_string()])),
@@ -208,26 +187,10 @@ impl eframe::App for MpiInstallerApp {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
             // Title
-            ui.heading(egui::RichText::new("MPI Installer & BSA Tools").size(24.0));
+            ui.heading(egui::RichText::new("MPI Installer").size(24.0));
             ui.add_space(5.0);
 
-            // Tab bar
-            ui.horizontal(|ui| {
-                if ui.selectable_label(self.active_tab == ActiveTab::Installer, "MPI Installer").clicked() {
-                    self.active_tab = ActiveTab::Installer;
-                }
-                ui.separator();
-                if ui.selectable_label(self.active_tab == ActiveTab::Decompressor, "BSA Decompressor").clicked() {
-                    self.active_tab = ActiveTab::Decompressor;
-                }
-            });
-            ui.separator();
-            ui.add_space(5.0);
-
-            match self.active_tab {
-                ActiveTab::Installer => self.show_installer_tab(ui),
-                ActiveTab::Decompressor => self.show_decompressor_tab(ui),
-            }
+            self.show_installer_tab(ui);
 
             ui.add_space(10.0);
 
@@ -386,141 +349,6 @@ impl MpiInstallerApp {
         if ui.add_enabled(can_install, button).clicked() {
             self.start_installation();
         }
-    }
-
-    fn show_decompressor_tab(&mut self, ui: &mut egui::Ui) {
-        ui.label("Decompress game BSA archives to improve mod compatibility and loading times.");
-        ui.add_space(5.0);
-
-        // TTW Warning - only show for FO3 (0) and FNV (1)
-        if self.decompress_game == 0 || self.decompress_game == 1 {
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgb(80, 40, 40))
-                .inner_margin(8.0)
-                .corner_radius(4.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::YELLOW, "WARNING:");
-                        ui.label("Do NOT decompress BSAs if you plan to install Tale of Two Wastelands.");
-                    });
-                    ui.label("TTW requires the original compressed game files. Only use this for standalone modding.");
-                });
-            ui.add_space(5.0);
-        }
-
-        egui::Grid::new("decompress_grid")
-            .num_columns(3)
-            .spacing([10.0, 8.0])
-            .show(ui, |ui| {
-                // Game selector
-                ui.label("Game:");
-                egui::ComboBox::from_id_salt("game_select")
-                    .width(500.0)
-                    .selected_text(match self.decompress_game {
-                        0 => "Fallout 3",
-                        1 => "Fallout New Vegas",
-                        2 => "Oblivion",
-                        _ => "Select game...",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.decompress_game, 0, "Fallout 3");
-                        ui.selectable_value(&mut self.decompress_game, 1, "Fallout New Vegas");
-                        ui.selectable_value(&mut self.decompress_game, 2, "Oblivion");
-                    });
-                ui.label(""); // Empty cell
-                ui.end_row();
-
-                // Data folder path
-                ui.label("Data Folder:");
-                ui.add_sized(
-                    [500.0, 20.0],
-                    egui::TextEdit::singleline(&mut self.decompress_path)
-                        .hint_text("Path to game's Data folder (e.g., .../Fallout 3/Data)")
-                );
-                if ui.button("Browse...").clicked() {
-                    if let Some(path) = pick_folder() {
-                        self.decompress_path = path;
-                    }
-                }
-                ui.end_row();
-
-                // Output folder (optional)
-                ui.label("Output Folder:");
-                ui.add_sized(
-                    [500.0, 20.0],
-                    egui::TextEdit::singleline(&mut self.decompress_output)
-                        .hint_text("Leave empty to replace in-place (with backup)")
-                );
-                if ui.button("Browse...").clicked() {
-                    if let Some(path) = pick_folder() {
-                        self.decompress_output = path;
-                    }
-                }
-                ui.end_row();
-            });
-
-        ui.add_space(5.0);
-
-        // Backup checkbox
-        ui.checkbox(&mut self.decompress_backup, "Create backup of original BSA files (.bsa.backup)");
-
-        ui.add_space(5.0);
-
-        // Info about FNV
-        if self.decompress_game == 1 {
-            ui.colored_label(egui::Color32::YELLOW,
-                "Note: FNV decompression also converts ambient/emitter OGG sounds to WAV format.");
-        }
-
-        ui.add_space(10.0);
-
-        // Start Decompression button
-        let can_decompress = self.status != InstallStatus::Running
-            && !self.decompress_path.is_empty();
-
-        let button = egui::Button::new(
-            egui::RichText::new("Start Decompression").size(16.0)
-        ).min_size(egui::vec2(760.0, 30.0));
-
-        if ui.add_enabled(can_decompress, button).clicked() {
-            self.start_decompression();
-        }
-    }
-
-    fn start_decompression(&mut self) {
-        self.status = InstallStatus::Running;
-        self.progress.store(0, Ordering::Relaxed);
-
-        // Clear logs
-        {
-            let mut logs = self.log_messages.lock().unwrap();
-            logs.clear();
-            logs.push("Starting BSA decompression...".to_string());
-        }
-
-        let game = match self.decompress_game {
-            0 => DecompressGame::Fallout3,
-            1 => DecompressGame::FalloutNV,
-            2 => DecompressGame::Oblivion,
-            _ => DecompressGame::Fallout3,
-        };
-
-        let data_path = PathBuf::from(&self.decompress_path);
-        let output_path = if self.decompress_output.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(&self.decompress_output))
-        };
-        let backup = self.decompress_backup;
-
-        let log_messages = Arc::clone(&self.log_messages);
-        let progress = Arc::clone(&self.progress);
-
-        let handle = thread::spawn(move || {
-            run_decompression(game, data_path, output_path, backup, log_messages, progress)
-        });
-
-        self.install_thread = Some(handle);
     }
 
     fn start_installation(&mut self) {
@@ -774,87 +602,6 @@ fn run_installation(
 
     progress.store(10000, Ordering::Relaxed); // 100%
     log("Installation complete!");
-    Ok(())
-}
-
-fn run_decompression(
-    game: DecompressGame,
-    data_path: PathBuf,
-    output_path: Option<PathBuf>,
-    backup: bool,
-    log_messages: Arc<Mutex<Vec<String>>>,
-    progress: Arc<AtomicU32>,
-) -> Result<(), String> {
-    let log = |msg: &str| {
-        if let Ok(mut logs) = log_messages.lock() {
-            logs.push(msg.to_string());
-        }
-    };
-
-    log(&format!("Game: {}", game.name()));
-    log(&format!("Data path: {}", data_path.display()));
-    if let Some(ref out) = output_path {
-        log(&format!("Output: {}", out.display()));
-    }
-    log(&format!("Backup: {}", if backup { "yes" } else { "no" }));
-
-    // Validate path
-    if !data_path.exists() {
-        return Err(format!("Data path does not exist: {}", data_path.display()));
-    }
-
-    // Create decompressor
-    let mut decompressor = BsaDecompressor::new(game, data_path.clone())
-        .with_backup(backup);
-
-    if let Some(out) = output_path {
-        decompressor = decompressor.with_output(out);
-    }
-
-    // Find BSAs
-    let bsas = decompressor.find_bsas()
-        .map_err(|e| format!("Failed to find BSAs: {}", e))?;
-
-    if bsas.is_empty() {
-        return Err(format!("No BSA files found for {} in {}", game.name(), data_path.display()));
-    }
-
-    log(&format!("Found {} BSA files", bsas.len()));
-    for bsa in &bsas {
-        log(&format!("  - {}", bsa.file_name().unwrap_or_default().to_string_lossy()));
-    }
-
-    let progress_clone = Arc::clone(&progress);
-    let log_messages_clone = Arc::clone(&log_messages);
-
-    // Run decompression
-    let result = decompressor.decompress_with_callback(move |current, total_bsas, msg| {
-        // Update progress
-        let pct = ((current as u32 * 10000) / total_bsas as u32).min(10000);
-        progress_clone.store(pct, Ordering::Relaxed);
-
-        // Log
-        if let Ok(mut logs) = log_messages_clone.lock() {
-            logs.push(format!("[{}/{}] {}", current, total_bsas, msg));
-        }
-    }).map_err(|e| format!("Decompression failed: {}", e))?;
-
-    // Summary
-    log(&format!("BSAs processed: {}", result.bsas_processed));
-    log(&format!("Files extracted: {}", result.files_extracted));
-    if result.files_converted > 0 {
-        log(&format!("OGG->WAV conversions: {}", result.files_converted));
-    }
-
-    if !result.errors.is_empty() {
-        for err in &result.errors {
-            log(&format!("Error: {}", err));
-        }
-        return Err(format!("{} errors occurred", result.errors.len()));
-    }
-
-    progress.store(10000, Ordering::Relaxed);
-    log("Decompression complete!");
     Ok(())
 }
 

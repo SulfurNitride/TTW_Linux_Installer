@@ -8,7 +8,6 @@ use ttw_installer::{
     services::{
         MpiExtractor, ManifestLoader, LocationResolver,
         AssetProcessor, XdeltaManager, Logger, FileVerifier,
-        BsaDecompressor, DecompressGame,
     },
 };
 
@@ -92,25 +91,6 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         count: usize,
     },
-
-    /// Decompress game BSA archives (removes internal compression)
-    Decompress {
-        /// Game to decompress: fo3, fnv, or oblivion
-        #[arg(short, long)]
-        game: String,
-
-        /// Path to the game's Data folder
-        #[arg(short, long)]
-        path: PathBuf,
-
-        /// Output directory (default: same as input, replaces BSAs)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Create backup of original BSA files
-        #[arg(long, default_value = "true")]
-        backup: bool,
-    },
 }
 
 fn main() -> Result<()> {
@@ -131,9 +111,6 @@ fn main() -> Result<()> {
         }
         Commands::Logs { count } => {
             run_logs(count)
-        }
-        Commands::Decompress { game, path, output, backup } => {
-            run_decompress(&game, &path, output.as_deref(), backup)
         }
     }
 }
@@ -582,82 +559,5 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
-    }
-}
-
-fn run_decompress(game_str: &str, data_path: &Path, output: Option<&Path>, backup: bool) -> Result<()> {
-    println!("=== BSA Decompressor ===\n");
-
-    // Parse game type
-    let game = DecompressGame::parse(game_str)
-        .ok_or_else(|| anyhow::anyhow!(
-            "Unknown game: '{}'. Use: fo3, fnv, or oblivion", game_str
-        ))?;
-
-    // TTW warning for FO3/FNV only
-    if game == DecompressGame::Fallout3 || game == DecompressGame::FalloutNV {
-        println!("WARNING: Do NOT decompress BSAs if you plan to install Tale of Two Wastelands!");
-        println!("         TTW requires the original compressed game files.");
-        println!("         Only use this for standalone modding.\n");
-    }
-
-    println!("Game: {}", game.name());
-    println!("Data path: {}", data_path.display());
-    if let Some(out) = output {
-        println!("Output: {}", out.display());
-    }
-    println!("Backup: {}", if backup { "yes" } else { "no" });
-    println!();
-
-    // Validate data path
-    if !data_path.exists() {
-        bail!("Data path does not exist: {}", data_path.display());
-    }
-
-    // Create decompressor
-    let mut decompressor = BsaDecompressor::new(game, data_path.to_path_buf())
-        .with_backup(backup);
-
-    if let Some(out) = output {
-        decompressor = decompressor.with_output(out.to_path_buf());
-    }
-
-    // Find BSAs first
-    let bsas = decompressor.find_bsas()?;
-    if bsas.is_empty() {
-        bail!("No BSA files found for {} in {}", game.name(), data_path.display());
-    }
-
-    println!("Found {} BSA files:", bsas.len());
-    for bsa in &bsas {
-        println!("  - {}", bsa.file_name().unwrap_or_default().to_string_lossy());
-    }
-    println!();
-
-    // Run decompression with progress
-    let result = decompressor.decompress_with_callback(|current, total, msg| {
-        println!("[{}/{}] {}", current, total, msg);
-    })?;
-
-    // Print summary
-    println!("\n=== Decompression Summary ===");
-    println!("  BSAs processed: {}", result.bsas_processed);
-    println!("  Files extracted: {}", result.files_extracted);
-    if result.files_converted > 0 {
-        println!("  OGG->WAV conversions: {}", result.files_converted);
-    }
-
-    if !result.errors.is_empty() {
-        println!("\nErrors:");
-        for err in &result.errors {
-            println!("  - {}", err);
-        }
-    }
-
-    if result.is_success() {
-        println!("\nDecompression complete!");
-        Ok(())
-    } else {
-        bail!("Decompression completed with {} errors", result.errors.len())
     }
 }
