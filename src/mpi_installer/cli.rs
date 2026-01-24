@@ -94,6 +94,32 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    // Set up panic handler to log crashes
+    std::panic::set_hook(Box::new(|panic_info| {
+        let crash_log = std::env::current_exe()
+            .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("crash.log"))
+            .unwrap_or_else(|_| PathBuf::from("crash.log"));
+
+        let message = format!(
+            "MPI Installer crashed!\n{}\n\nBacktrace:\n{:?}\n\n",
+            panic_info,
+            std::backtrace::Backtrace::capture()
+        );
+
+        // Try to write to crash log
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_log)
+        {
+            use std::io::Write;
+            let _ = file.write_all(message.as_bytes());
+        }
+
+        // Also print to stderr
+        eprintln!("{}", message);
+    }));
+
     let cli = Cli::parse();
 
     match cli.command {

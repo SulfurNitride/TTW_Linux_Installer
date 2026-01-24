@@ -88,17 +88,16 @@ impl Logger {
         Ok(())
     }
 
-    /// Get the log directory path
+    /// Get the log directory path (next to executable)
     fn get_log_directory() -> Result<PathBuf> {
-        // Use XDG data directory on Linux: ~/.local/share/mpi_installer/logs
-        // Falls back to ~/.mpi_installer/logs
-        if let Some(data_dir) = dirs::data_dir() {
-            Ok(data_dir.join("mpi_installer").join("logs"))
-        } else if let Some(home) = dirs::home_dir() {
-            Ok(home.join(".mpi_installer").join("logs"))
-        } else {
-            Ok(PathBuf::from("./logs"))
+        // Store logs next to the executable for easy access
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                return Ok(exe_dir.join("logs"));
+            }
         }
+        // Fallback to current working directory
+        Ok(PathBuf::from("./logs"))
     }
 
     /// Sanitize a string for use in filenames
