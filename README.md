@@ -5,6 +5,8 @@ A linux native installer for MPI packages (TTW, BSA Decompressors, so far only t
 
 To run it all you need to do is either double click it and allow executing, or `chmod +x mpi_installer_gui`.
 
+You can also download the the tool through Nexus if you prefer. https://www.nexusmods.com/site/mods/1657
+
 ## Where to get MPI files?
 
 **TTW:** https://mod.pub/ttw/133/files - need to make an account and download the latest Tale of Two Wastelands file. Extract it and the mpi file will be inside.
