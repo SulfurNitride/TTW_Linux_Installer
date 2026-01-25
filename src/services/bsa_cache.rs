@@ -2,7 +2,10 @@ use anyhow::{Result, Context};
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::collections::HashMap;
 use tracing::{info, warn};
+use ba2::tes4::{Archive, ArchiveKey, DirectoryKey, File as BsaFile};
+use ba2::{ByteSlice, Reader};
 
 /// SQLite-based cache for BSA file extraction
 /// Stores extracted files on disk instead of RAM, dramatically reducing memory usage
@@ -166,4 +169,57 @@ impl Drop for BsaCache {
             info!("Cleaned up SQLite cache: {}", self.db_path.display());
         }
     }
+}
+
+/// Get file sizes from a BSA without extracting the data
+/// Returns a map of file_path -> uncompressed size in bytes
+pub fn get_bsa_file_sizes(bsa_path: &Path, file_paths: &[&str]) -> Result<HashMap<String, usize>> {
+    let (archive, _): (Archive, _) = Archive::read(bsa_path)
+        .with_context(|| format!("Failed to open BSA for size query: {}", bsa_path.display()))?;
+
+    // Build set of needed paths (normalized to lowercase with backslashes)
+    let needed: std::collections::HashSet<String> = file_paths.iter()
+        .map(|p| p.replace('/', "\\").to_lowercase())
+        .collect();
+
+    // Build lookup for original casing
+    let path_lookup: HashMap<String, &str> = file_paths.iter()
+        .map(|p| (p.replace('/', "\\").to_lowercase(), *p))
+        .collect();
+
+    let mut sizes = HashMap::new();
+
+    for (dir_key, folder) in archive.iter() {
+        let dir_key: &ArchiveKey = dir_key;
+        let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes()).to_lowercase();
+
+        for (file_key, file) in folder.iter() {
+            let file_key: &DirectoryKey = file_key;
+            let file: &BsaFile = file;
+            let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_lowercase();
+            let full_path = if dir_name.is_empty() || dir_name == "." {
+                file_name.clone()
+            } else {
+                format!("{}\\{}", dir_name, file_name)
+            };
+
+            if needed.contains(&full_path) {
+                // Get file size - for compressed files, estimate ~3x compression ratio
+                // This is conservative (real ratio is often 2-4x for textures)
+                let size = if file.is_compressed() {
+                    file.as_bytes().len() * 3 // Estimate decompressed size
+                } else {
+                    file.as_bytes().len()
+                };
+
+                let original_path = path_lookup.get(&full_path)
+                    .map(|s| s.to_string())
+                    .unwrap_or(full_path);
+
+                sizes.insert(original_path, size);
+            }
+        }
+    }
+
+    Ok(sizes)
 }

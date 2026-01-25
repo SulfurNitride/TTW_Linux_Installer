@@ -1,6 +1,6 @@
 [package]
 name = "ttw_installer"
-version = "0.1.2"
+version = "0.1.5"
 edition = "2021"
 description = "Tale of Two Wastelands Linux Installer"
 authors = ["Sulfur Nitride"]

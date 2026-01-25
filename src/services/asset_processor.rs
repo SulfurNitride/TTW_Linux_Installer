@@ -15,38 +15,32 @@ use crate::services::{
     BsaCache,
 };
 
-/// Calculate RAM-aware chunk size for processing
-/// Returns number of assets per chunk based on available RAM
-fn calculate_chunk_size(total_assets: usize, avg_file_size_estimate: usize) -> usize {
+/// Get number of chunks based on available RAM
+/// - 4GB or less → 8 chunks
+/// - 8GB → 4 chunks
+/// - 16GB → 2 chunks
+/// - 24GB+ → 1 chunk (all at once)
+fn get_chunk_count_for_ram() -> usize {
     let mut sys = System::new_all();
     sys.refresh_memory();
+    let available_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
 
-    let available_ram = sys.available_memory() as usize;
-    // Use 50% of available RAM for processing buffer
-    let usable_ram = available_ram / 2;
-
-    // Estimate: each asset in flight uses ~avg_file_size_estimate bytes
-    // With parallel processing, assume num_cpus files in flight at once
-    let num_cpus = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
-
-    // Memory per chunk = chunk_size * avg_file_size * parallelism_factor
-    // We want chunk_size * avg_file_size * num_cpus <= usable_ram
-    let chunk_size = usable_ram / (avg_file_size_estimate * num_cpus).max(1);
-
-    // Clamp to reasonable bounds
-    let chunk_size = chunk_size.max(100).min(total_assets);
+    let chunks = if available_gb >= 24.0 {
+        1  // All at once
+    } else if available_gb >= 16.0 {
+        2
+    } else if available_gb >= 8.0 {
+        4
+    } else {
+        8  // Conservative for low RAM
+    };
 
     info!(
-        "RAM-aware chunking: {:.1}GB available, using {:.1}GB, chunk_size={}, parallelism={}",
-        available_ram as f64 / 1024.0 / 1024.0 / 1024.0,
-        usable_ram as f64 / 1024.0 / 1024.0 / 1024.0,
-        chunk_size,
-        num_cpus
+        "System RAM: {:.1}GB available → {} chunk(s)",
+        available_gb, chunks
     );
 
-    chunk_size
+    chunks
 }
 
 /// Find a file with case-insensitive matching (for Linux compatibility)
@@ -378,11 +372,14 @@ impl AssetProcessor {
             println!("  {} ({}): {}", name, op_type, group.len());
         }
 
-        // Calculate RAM-aware chunk size (estimate 500KB average file size)
-        let chunk_size = calculate_chunk_size(assets.len(), 500 * 1024);
-        let num_chunks = (assets.len() + chunk_size - 1) / chunk_size;
+        // === Determine chunk count based on available RAM ===
+        let num_chunks = get_chunk_count_for_ram();
+        let chunk_size = assets.len().div_ceil(num_chunks);
 
-        println!("\n=== Processing in {} RAM-aware chunks (chunk_size={}) ===", num_chunks, chunk_size);
+        println!(
+            "\n=== Processing in {} chunk(s) ({} assets/chunk) ===\n",
+            num_chunks, chunk_size
+        );
 
         let success = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
@@ -394,8 +391,15 @@ impl AssetProcessor {
             .unwrap()
             .progress_chars("#>-"));
 
-        // Process assets in RAM-aware chunks
+        // Process each chunk
         for (chunk_idx, chunk) in assets.chunks(chunk_size).enumerate() {
+            pb.set_message(format!(
+                "Chunk {}/{} ({} files)",
+                chunk_idx + 1,
+                num_chunks,
+                chunk.len()
+            ));
+
             // Pre-extract BSA files for this chunk only
             let mut bsa_files_needed: HashMap<PathBuf, Vec<&str>> = HashMap::new();
             for asset in chunk {
@@ -476,23 +480,26 @@ impl AssetProcessor {
         let total = assets.len();
         let callback = Arc::new(callback);
 
-        // Calculate RAM-aware chunk size (estimate 500KB average file size)
-        let chunk_size = calculate_chunk_size(total, 500 * 1024);
-        let num_chunks = (total + chunk_size - 1) / chunk_size;
+        // === Determine chunk count based on available RAM ===
+        let num_chunks = get_chunk_count_for_ram();
+        let chunk_size = total.div_ceil(num_chunks);
 
-        callback(0, total, &format!("Processing in {} RAM-aware chunks...", num_chunks));
+        callback(0, total, &format!(
+            "Processing in {} chunk(s) ({} assets/chunk)...",
+            num_chunks, chunk_size
+        ));
 
         let success = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
         let processed = AtomicUsize::new(0);
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-        // Process assets in RAM-aware chunks
+        // Process each chunk
         for (chunk_idx, chunk) in assets.chunks(chunk_size).enumerate() {
             callback(
                 processed.load(Ordering::Relaxed),
                 total,
-                &format!("Chunk {}/{}: Pre-extracting BSA files...", chunk_idx + 1, num_chunks)
+                &format!("Chunk {}/{} ({} files): Pre-extracting...", chunk_idx + 1, num_chunks, chunk.len())
             );
 
             // Pre-extract BSA files for this chunk only
