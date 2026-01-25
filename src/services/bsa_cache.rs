@@ -22,13 +22,14 @@ impl BsaCache {
         let conn = Connection::open(&db_path)
             .with_context(|| format!("Failed to create SQLite cache at {}", db_path.display()))?;
 
-        // Configure for performance
+        // Configure for performance with minimal memory footprint
         conn.execute_batch(
             "PRAGMA journal_mode = OFF;
              PRAGMA synchronous = OFF;
-             PRAGMA cache_size = 100000;
-             PRAGMA temp_store = MEMORY;
-             PRAGMA locking_mode = EXCLUSIVE;"
+             PRAGMA cache_size = 1000;
+             PRAGMA temp_store = FILE;
+             PRAGMA locking_mode = EXCLUSIVE;
+             PRAGMA mmap_size = 0;"
         ).context("Failed to configure SQLite pragmas")?;
 
         // Create cache table

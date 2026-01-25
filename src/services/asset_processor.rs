@@ -7,12 +7,47 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use tracing::{warn, info};
+use sysinfo::System;
 
 use crate::models::{Asset, Location};
 use crate::services::{
     LocationResolver, BsaHandler, BsaWriterManager, AudioProcessor, AudioFormat, XdeltaManager,
     BsaCache,
 };
+
+/// Calculate RAM-aware chunk size for processing
+/// Returns number of assets per chunk based on available RAM
+fn calculate_chunk_size(total_assets: usize, avg_file_size_estimate: usize) -> usize {
+    let mut sys = System::new_all();
+    sys.refresh_memory();
+
+    let available_ram = sys.available_memory() as usize;
+    // Use 50% of available RAM for processing buffer
+    let usable_ram = available_ram / 2;
+
+    // Estimate: each asset in flight uses ~avg_file_size_estimate bytes
+    // With parallel processing, assume num_cpus files in flight at once
+    let num_cpus = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4);
+
+    // Memory per chunk = chunk_size * avg_file_size * parallelism_factor
+    // We want chunk_size * avg_file_size * num_cpus <= usable_ram
+    let chunk_size = usable_ram / (avg_file_size_estimate * num_cpus).max(1);
+
+    // Clamp to reasonable bounds
+    let chunk_size = chunk_size.max(100).min(total_assets);
+
+    info!(
+        "RAM-aware chunking: {:.1}GB available, using {:.1}GB, chunk_size={}, parallelism={}",
+        available_ram as f64 / 1024.0 / 1024.0 / 1024.0,
+        usable_ram as f64 / 1024.0 / 1024.0 / 1024.0,
+        chunk_size,
+        num_cpus
+    );
+
+    chunk_size
+}
 
 /// Find a file with case-insensitive matching (for Linux compatibility)
 fn find_file_case_insensitive(path: &Path) -> Option<PathBuf> {
@@ -335,7 +370,7 @@ impl AssetProcessor {
             by_type.entry(asset.op_type).or_default().push(asset);
         }
 
-        println!("\nProcessing {} total assets (parallel):", assets.len());
+        println!("\nProcessing {} total assets:", assets.len());
         for (op_type, group) in &by_type {
             let name = OpType::from_i32(*op_type)
                 .map(|t| t.name())
@@ -343,68 +378,12 @@ impl AssetProcessor {
             println!("  {} ({}): {}", name, op_type, group.len());
         }
 
-        // === PHASE 1: Pre-extract BSA files into cache ===
-        // Group assets by source BSA to minimize re-opening
-        let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
-        let mut non_bsa_assets: Vec<&Asset> = Vec::new();
+        // Calculate RAM-aware chunk size (estimate 500KB average file size)
+        let chunk_size = calculate_chunk_size(assets.len(), 500 * 1024);
+        let num_chunks = (assets.len() + chunk_size - 1) / chunk_size;
 
-        for asset in assets {
-            if self.resolver.is_bsa_location(asset.source_loc) {
-                if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
-                    bsa_assets.entry(bsa_path).or_default().push(asset);
-                }
-            } else {
-                non_bsa_assets.push(asset);
-            }
-        }
+        println!("\n=== Processing in {} RAM-aware chunks (chunk_size={}) ===", num_chunks, chunk_size);
 
-        // Sort BSAs by number of assets (process largest first)
-        let mut bsa_order: Vec<_> = bsa_assets.keys().cloned().collect();
-        bsa_order.sort_by(|a, b| {
-            bsa_assets.get(b).map(|v| v.len()).unwrap_or(0)
-                .cmp(&bsa_assets.get(a).map(|v| v.len()).unwrap_or(0))
-        });
-
-        println!("\n=== Pre-extracting from {} BSA archives (SQLite cache) ===", bsa_order.len());
-
-        // Pre-extract from all BSAs (sequential for SQLite - parallel writes would cause contention)
-        let extraction_results: Vec<_> = bsa_order.iter().filter_map(|bsa_path| {
-            let assets_from_bsa = bsa_assets.get(bsa_path)?;
-            let file_paths: Vec<&str> = assets_from_bsa.iter()
-                .map(|a| a.source_path.as_str())
-                .collect();
-
-            let bsa_name = bsa_path.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            match self.pre_extract_bsa_files(bsa_path, &file_paths) {
-                Ok((extracted, bytes)) => {
-                    info!("Pre-extracted {} from {} ({:.1} MB)", extracted, bsa_name, bytes as f64 / 1024.0 / 1024.0);
-                    Some((bsa_name, extracted, bytes, true))
-                }
-                Err(e) => {
-                    warn!("Failed to pre-extract {}: {}", bsa_name, e);
-                    Some((bsa_name, 0, 0, false))
-                }
-            }
-        }).collect();
-
-        let total_pre_extracted: usize = extraction_results.iter().map(|(_, e, _, _)| e).sum();
-        let total_bytes: usize = extraction_results.iter().map(|(_, _, b, _)| b).sum();
-        let successful = extraction_results.iter().filter(|(_, _, _, ok)| *ok).count();
-        let db_size = self.bsa_cache.db_size_bytes();
-
-        println!(
-            "Pre-extraction complete: {} files from {}/{} BSAs ({:.1} GB data, {:.1} MB SQLite DB)\n",
-            total_pre_extracted,
-            successful,
-            bsa_order.len(),
-            total_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
-            db_size as f64 / 1024.0 / 1024.0
-        );
-
-        // === PHASE 2: Process all assets in parallel ===
         let success = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -415,36 +394,58 @@ impl AssetProcessor {
             .unwrap()
             .progress_chars("#>-"));
 
-        // Process assets in parallel (cache hits will be fast, misses fall back to direct extraction)
-        assets.par_iter().for_each(|asset| {
-            let result = self.process_asset(asset);
-
-            match result {
-                Ok(_) => {
-                    success.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e) => {
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let error_msg = format!(
-                        "{} (op={}): {}",
-                        asset.source_path, asset.op_type, e
-                    );
-                    warn!("Asset failed: {}", error_msg);
-                    let mut errs = errors.lock().unwrap();
-                    if errs.len() < 100 {
-                        errs.push(error_msg);
+        // Process assets in RAM-aware chunks
+        for (chunk_idx, chunk) in assets.chunks(chunk_size).enumerate() {
+            // Pre-extract BSA files for this chunk only
+            let mut bsa_files_needed: HashMap<PathBuf, Vec<&str>> = HashMap::new();
+            for asset in chunk {
+                if self.resolver.is_bsa_location(asset.source_loc) {
+                    if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
+                        bsa_files_needed.entry(bsa_path)
+                            .or_default()
+                            .push(&asset.source_path);
                     }
                 }
             }
 
-            pb.inc(1);
-            let s = success.load(Ordering::Relaxed);
-            let f = failed.load(Ordering::Relaxed);
-            pb.set_message(format!("OK:{} Fail:{}", s, f));
-        });
+            // Pre-extract this chunk's BSA files to SQLite
+            for (bsa_path, file_paths) in &bsa_files_needed {
+                if let Err(e) = self.pre_extract_bsa_files(bsa_path, file_paths) {
+                    warn!("Failed to pre-extract from {}: {}", bsa_path.display(), e);
+                }
+            }
 
-        // Clear cache after processing
-        self.clear_bsa_cache();
+            // Process this chunk in parallel
+            chunk.par_iter().for_each(|asset| {
+                let result = self.process_asset(asset);
+
+                match result {
+                    Ok(_) => {
+                        success.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        let error_msg = format!(
+                            "{} (op={}): {}",
+                            asset.source_path, asset.op_type, e
+                        );
+                        warn!("Asset failed: {}", error_msg);
+                        let mut errs = errors.lock().unwrap();
+                        if errs.len() < 100 {
+                            errs.push(error_msg);
+                        }
+                    }
+                }
+
+                pb.inc(1);
+                let s = success.load(Ordering::Relaxed);
+                let f = failed.load(Ordering::Relaxed);
+                pb.set_message(format!("OK:{} Fail:{} (chunk {}/{})", s, f, chunk_idx + 1, num_chunks));
+            });
+
+            // Clear cache after each chunk to free memory
+            self.clear_bsa_cache();
+        }
 
         let final_success = success.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
@@ -475,80 +476,79 @@ impl AssetProcessor {
         let total = assets.len();
         let callback = Arc::new(callback);
 
-        // === PHASE 1: Pre-extract BSA files into cache ===
-        callback(0, total, "Pre-extracting BSA files...");
+        // Calculate RAM-aware chunk size (estimate 500KB average file size)
+        let chunk_size = calculate_chunk_size(total, 500 * 1024);
+        let num_chunks = (total + chunk_size - 1) / chunk_size;
 
-        let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
-        for asset in assets {
-            if self.resolver.is_bsa_location(asset.source_loc) {
-                if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
-                    bsa_assets.entry(bsa_path).or_default().push(asset);
-                }
-            }
-        }
+        callback(0, total, &format!("Processing in {} RAM-aware chunks...", num_chunks));
 
-        // Sort BSAs by number of assets (process largest first)
-        let mut bsa_order: Vec<_> = bsa_assets.keys().cloned().collect();
-        bsa_order.sort_by(|a, b| {
-            bsa_assets.get(b).map(|v| v.len()).unwrap_or(0)
-                .cmp(&bsa_assets.get(a).map(|v| v.len()).unwrap_or(0))
-        });
-
-        // Pre-extract from all BSAs (sequential for SQLite cache)
-        callback(0, total, &format!("Pre-extracting from {} BSAs (SQLite cache)...", bsa_order.len()));
-
-        let extraction_results: Vec<_> = bsa_order.iter().filter_map(|bsa_path| {
-            let assets_from_bsa = bsa_assets.get(bsa_path)?;
-            let file_paths: Vec<&str> = assets_from_bsa.iter()
-                .map(|a| a.source_path.as_str())
-                .collect();
-
-            self.pre_extract_bsa_files(bsa_path, &file_paths).ok()
-        }).collect();
-
-        let total_pre_extracted: usize = extraction_results.iter().map(|(e, _)| e).sum();
-
-        callback(0, total, &format!("Pre-extracted {} files, processing...", total_pre_extracted));
-
-        // === PHASE 2: Process all assets in parallel ===
         let success = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
         let processed = AtomicUsize::new(0);
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-        assets.par_iter().for_each(|asset| {
-            let result = self.process_asset(asset);
+        // Process assets in RAM-aware chunks
+        for (chunk_idx, chunk) in assets.chunks(chunk_size).enumerate() {
+            callback(
+                processed.load(Ordering::Relaxed),
+                total,
+                &format!("Chunk {}/{}: Pre-extracting BSA files...", chunk_idx + 1, num_chunks)
+            );
 
-            match result {
-                Ok(_) => {
-                    success.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(e) => {
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let error_msg = format!(
-                        "{} (op={}): {}",
-                        asset.source_path, asset.op_type, e
-                    );
-                    warn!("Asset failed: {}", error_msg);
-                    let mut errs = errors.lock().unwrap();
-                    if errs.len() < 100 {
-                        errs.push(error_msg);
+            // Pre-extract BSA files for this chunk only
+            let mut bsa_files_needed: HashMap<PathBuf, Vec<&str>> = HashMap::new();
+            for asset in chunk {
+                if self.resolver.is_bsa_location(asset.source_loc) {
+                    if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
+                        bsa_files_needed.entry(bsa_path)
+                            .or_default()
+                            .push(&asset.source_path);
                     }
                 }
             }
 
-            let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            let s = success.load(Ordering::Relaxed);
-            let f = failed.load(Ordering::Relaxed);
-
-            let callback_interval = if total > 1000 { 50 } else if total > 100 { 10 } else { 1 };
-            if current.is_multiple_of(callback_interval) || current == total || current <= 5 {
-                callback(current, total, &format!("Processing: {} OK, {} failed", s, f));
+            // Pre-extract this chunk's BSA files to SQLite
+            for (bsa_path, file_paths) in &bsa_files_needed {
+                if let Err(e) = self.pre_extract_bsa_files(bsa_path, file_paths) {
+                    warn!("Failed to pre-extract from {}: {}", bsa_path.display(), e);
+                }
             }
-        });
 
-        // Clear cache after processing
-        self.clear_bsa_cache();
+            // Process this chunk in parallel
+            chunk.par_iter().for_each(|asset| {
+                let result = self.process_asset(asset);
+
+                match result {
+                    Ok(_) => {
+                        success.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        let error_msg = format!(
+                            "{} (op={}): {}",
+                            asset.source_path, asset.op_type, e
+                        );
+                        warn!("Asset failed: {}", error_msg);
+                        let mut errs = errors.lock().unwrap();
+                        if errs.len() < 100 {
+                            errs.push(error_msg);
+                        }
+                    }
+                }
+
+                let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                let s = success.load(Ordering::Relaxed);
+                let f = failed.load(Ordering::Relaxed);
+
+                let callback_interval = if total > 1000 { 50 } else if total > 100 { 10 } else { 1 };
+                if current.is_multiple_of(callback_interval) || current == total || current <= 5 {
+                    callback(current, total, &format!("Chunk {}/{}: {} OK, {} failed", chunk_idx + 1, num_chunks, s, f));
+                }
+            });
+
+            // Clear cache after each chunk to free memory
+            self.clear_bsa_cache();
+        }
 
         let final_success = success.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
