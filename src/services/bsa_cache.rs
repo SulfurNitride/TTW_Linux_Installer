@@ -66,8 +66,12 @@ impl BsaCache {
         Ok(data.len())
     }
 
-    /// Insert multiple files in a single transaction (much faster for bulk inserts)
-    pub fn insert_batch(&self, bsa_path: &Path, files: Vec<(String, Vec<u8>)>) -> Result<(usize, usize)> {
+    /// Insert multiple files using a callback that yields files one at a time
+    /// This avoids loading all files into RAM - each file is inserted and then dropped
+    pub fn insert_streaming<F>(&self, bsa_path: &Path, mut producer: F) -> Result<(usize, usize)>
+    where
+        F: FnMut(&mut dyn FnMut(String, Vec<u8>) -> Result<()>) -> Result<()>,
+    {
         let bsa_str = bsa_path.to_string_lossy().to_string();
         let mut conn = self.conn.lock().unwrap();
 
@@ -82,12 +86,15 @@ impl BsaCache {
                 "INSERT OR REPLACE INTO bsa_cache (bsa_path, file_path, data) VALUES (?1, ?2, ?3)"
             ).context("Failed to prepare insert statement")?;
 
-            for (file_path, data) in files {
+            let mut inserter = |file_path: String, data: Vec<u8>| -> Result<()> {
                 bytes += data.len();
                 stmt.execute(params![&bsa_str, &file_path, &data])
                     .with_context(|| format!("Failed to cache {}:{}", bsa_str, file_path))?;
                 count += 1;
-            }
+                Ok(())
+            };
+
+            producer(&mut inserter)?;
         }
 
         tx.commit().context("Failed to commit transaction")?;

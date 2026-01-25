@@ -254,6 +254,7 @@ impl AssetProcessor {
     }
 
     /// Pre-extract files from a BSA into the SQLite cache
+    /// Uses streaming inserts to avoid loading all files into RAM at once
     /// Returns (files_extracted, bytes_used)
     fn pre_extract_bsa_files(
         &self,
@@ -278,44 +279,43 @@ impl AssetProcessor {
             .map(|p| (p.replace('/', "\\").to_lowercase(), *p))
             .collect();
 
-        // Collect all matching files for batch insert
-        let mut files_to_cache: Vec<(String, Vec<u8>)> = Vec::new();
+        // Stream files directly to SQLite - each file is inserted and dropped immediately
+        // This keeps RAM usage low (only one file in memory at a time)
+        let (count, bytes) = self.bsa_cache.insert_streaming(bsa_path, |inserter| {
+            for (dir_key, folder) in archive.iter() {
+                let dir_key: &ArchiveKey = dir_key;
+                let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes()).to_lowercase();
 
-        // Iterate through archive and extract matching files
-        for (dir_key, folder) in archive.iter() {
-            let dir_key: &ArchiveKey = dir_key;
-            let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes()).to_lowercase();
-
-            for (file_key, file) in folder.iter() {
-                let file_key: &DirectoryKey = file_key;
-                let file: &BsaFile = file;
-                let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_lowercase();
-                let full_path = if dir_name.is_empty() || dir_name == "." {
-                    file_name.clone()
-                } else {
-                    format!("{}\\{}", dir_name, file_name)
-                };
-
-                if needed.contains(&full_path) {
-                    // Extract file data
-                    let data = if file.is_compressed() {
-                        file.decompress(&Default::default())?.as_bytes().to_vec()
+                for (file_key, file) in folder.iter() {
+                    let file_key: &DirectoryKey = file_key;
+                    let file: &BsaFile = file;
+                    let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_lowercase();
+                    let full_path = if dir_name.is_empty() || dir_name == "." {
+                        file_name.clone()
                     } else {
-                        file.as_bytes().to_vec()
+                        format!("{}\\{}", dir_name, file_name)
                     };
 
-                    // Find original path case from lookup
-                    let original_path = path_lookup.get(&full_path)
-                        .map(|s| s.to_string())
-                        .unwrap_or(full_path);
+                    if needed.contains(&full_path) {
+                        // Extract file data
+                        let data = if file.is_compressed() {
+                            file.decompress(&Default::default())?.as_bytes().to_vec()
+                        } else {
+                            file.as_bytes().to_vec()
+                        };
 
-                    files_to_cache.push((original_path, data));
+                        // Find original path case from lookup
+                        let original_path = path_lookup.get(&full_path)
+                            .map(|s| s.to_string())
+                            .unwrap_or(full_path);
+
+                        // Insert immediately - data is dropped after this call
+                        inserter(original_path, data)?;
+                    }
                 }
             }
-        }
-
-        // Batch insert into SQLite (much faster than individual inserts)
-        let (count, bytes) = self.bsa_cache.insert_batch(bsa_path, files_to_cache)?;
+            Ok(())
+        })?;
 
         Ok((count, bytes))
     }
