@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use tracing::{info, warn, error};
 
 use ttw_installer::{
@@ -149,6 +150,7 @@ fn run_install(
     dest: &Path,
     dry_run: bool
 ) -> Result<()> {
+    let install_start = Instant::now();
     println!("=== MPI Linux Installer ===\n");
 
     // Validate provided paths
@@ -273,16 +275,16 @@ fn run_install(
         dest.to_path_buf(),
         &locations,
         &bsa_targets,
-    ).with_dry_run(dry_run);
+    )?.with_dry_run(dry_run);
 
     // Create destination directory
     if !dry_run {
         std::fs::create_dir_all(dest)?;
     }
 
-    // Process assets
-    info!("=== Processing Assets ===");
-    let stats = processor.process_assets(&assets)?;
+    // Process assets using streaming mode (parallel BSA processing, minimal RAM)
+    info!("=== Processing Assets (Streaming Mode) ===");
+    let stats = processor.process_assets_streaming(&assets)?;
 
     info!("Processing complete: {} success, {} failed", stats.success, stats.failed);
     for err in &stats.errors {
@@ -309,7 +311,12 @@ fn run_install(
         MpiExtractor::cleanup_temp(&mpi_dir)?;
     }
 
+    let elapsed = install_start.elapsed();
+    let minutes = elapsed.as_secs() / 60;
+    let seconds = elapsed.as_secs() % 60;
+
     println!("\n=== Installation Complete ===");
+    println!("Total time: {}m {}s", minutes, seconds);
     println!("Log saved to: {}", logger.log_path().display());
     Ok(())
 }

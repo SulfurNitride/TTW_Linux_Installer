@@ -1,6 +1,6 @@
 [package]
 name = "ttw_installer"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Tale of Two Wastelands Linux Installer"
 authors = ["Sulfur Nitride"]
@@ -13,9 +13,9 @@ ba2 = "3.0.1"
 anyhow = "1.0"
 thiserror = "1.0"
 
-# Compression
+# Compression (zlib-rs is pure Rust and fastest for BSA decompression)
 lz4_flex = "0.12"
-flate2 = "1.0"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 
 # Audio decoding (pure Rust)
 symphonia = { version = "0.5", features = ["ogg", "wav", "pcm", "vorbis", "mp3"] }
@@ -41,6 +41,7 @@ clap = { version = "4.0", features = ["derive"] }
 
 # Parallel processing
 rayon = "1.10"
+crossbeam-channel = "0.5"  # For bounded producer-consumer pattern
 
 # System info (for memory detection)
 sysinfo = "0.35"
@@ -48,6 +49,7 @@ sysinfo = "0.35"
 # File utilities
 walkdir = "2.5"
 tempfile = "3.10"
+memmap2 = "0.9"  # Memory-mapped files (uses virtual memory, not RAM)
 
 # Hashing
 sha1 = "0.10"
@@ -92,3 +94,4 @@ path = "src/mpi_installer/cli.rs"
 [[bin]]
 name = "mpi_installer_gui"
 path = "src/mpi_installer/gui.rs"
+

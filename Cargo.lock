@@ -1461,6 +1461,7 @@ dependencies = [
  "crc32fast",
  "libz-sys",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -4087,12 +4088,13 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 
 [[package]]
 name = "ttw_installer"
-version = "0.1.2"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "ba2",
  "chrono",
  "clap",
+ "crossbeam-channel",
  "dirs",
  "eframe",
  "egui",
@@ -4103,6 +4105,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "md-5",
+ "memmap2",
  "mp3lame-encoder",
  "rayon",
  "rfd",
@@ -5543,6 +5546,12 @@ dependencies = [
  "time",
  "zstd",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 
 [[package]]
 name = "zmij"

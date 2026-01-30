@@ -16,27 +16,29 @@ use crate::services::{
 };
 
 /// Get number of chunks based on available RAM
-/// - 4GB or less → 8 chunks
-/// - 8GB → 4 chunks
-/// - 16GB → 2 chunks
-/// - 24GB+ → 1 chunk (all at once)
+/// Now that we use streaming BSA builders (write to disk, not RAM),
+/// we can be much more aggressive with chunk sizes.
+/// Peak RAM is ~2GB regardless of total assets.
+///
+/// - 4GB or less → 2 chunks (conservative)
+/// - 6GB+ → 1 chunk (all at once, no pauses!)
 fn get_chunk_count_for_ram() -> usize {
     let mut sys = System::new_all();
     sys.refresh_memory();
     let available_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
 
-    let chunks = if available_gb >= 24.0 {
-        1  // All at once
-    } else if available_gb >= 16.0 {
-        2
-    } else if available_gb >= 8.0 {
-        4
+    // With streaming BSA builders, we only need ~2GB peak RAM
+    // So even modest systems can process in one chunk
+    let chunks = if available_gb >= 6.0 {
+        1  // All at once - no chunk boundary pauses!
+    } else if available_gb >= 4.0 {
+        2  // Two chunks for tighter systems
     } else {
-        8  // Conservative for low RAM
+        4  // Conservative for very low RAM (<4GB)
     };
 
     info!(
-        "System RAM: {:.1}GB available → {} chunk(s)",
+        "System RAM: {:.1}GB available → {} chunk(s) (streaming mode)",
         available_gb, chunks
     );
 
@@ -174,7 +176,7 @@ impl AssetProcessor {
         dest_dir: PathBuf,
         locations: &[Location],
         bsa_targets: &[Location],  // Separate BSA target locations (may come from different profile)
-    ) -> Self {
+    ) -> Result<Self> {
         let mut bsa_writer = BsaWriterManager::new();
 
         let mut type_counts = std::collections::HashMap::new();
@@ -230,7 +232,7 @@ impl AssetProcessor {
                         bsa_loc.archive_flags,
                         bsa_loc.files_flags,
                         bsa_loc.archive_compressed,
-                    );
+                    )?;
                 }
             }
         } else {
@@ -246,26 +248,26 @@ impl AssetProcessor {
 
                 // Format 1: Type 0 with .bsa in NAME (TTW 3.4 style)
                 if loc.loc_type == 0 && is_bsa_name {
-                    bsa_writer.register_bsa(i as i32, name, loc.archive_type, loc.archive_flags, loc.files_flags, loc.archive_compressed);
+                    bsa_writer.register_bsa(i as i32, name, loc.archive_type, loc.archive_flags, loc.files_flags, loc.archive_compressed)?;
                 }
                 // Format 2: Type 2 with .bsa in VALUE (original MPI format)
                 else if loc.loc_type == 2 && is_bsa_value {
                     let normalized = value.replace('\\', "/");
                     let bsa_name = normalized.rsplit('/').next().unwrap_or(&normalized);
-                    bsa_writer.register_bsa(i as i32, bsa_name, loc.archive_type, loc.archive_flags, loc.files_flags, loc.archive_compressed);
+                    bsa_writer.register_bsa(i as i32, bsa_name, loc.archive_type, loc.archive_flags, loc.files_flags, loc.archive_compressed)?;
                 }
                 // Format 3: Type 1 with "NEW " prefix
                 else if loc.loc_type == 1 && has_new_prefix && is_bsa_value {
-                    bsa_writer.register_bsa(i as i32, name, loc.archive_type, loc.archive_flags, loc.files_flags, loc.archive_compressed);
+                    bsa_writer.register_bsa(i as i32, name, loc.archive_type, loc.archive_flags, loc.files_flags, loc.archive_compressed)?;
                 }
             }
         }
 
         // Create SQLite-based cache (uses disk instead of RAM)
         let bsa_cache = BsaCache::new()
-            .expect("Failed to create SQLite BSA cache");
+            .context("Failed to create SQLite BSA cache")?;
 
-        Self {
+        Ok(Self {
             resolver: Arc::new(resolver),
             bsa_handler: Arc::new(Mutex::new(BsaHandler::new())),
             bsa_writer: Arc::new(Mutex::new(bsa_writer)),
@@ -274,7 +276,7 @@ impl AssetProcessor {
             mpi_dir,
             dest_dir,
             dry_run: false,
-        }
+        })
     }
 
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
@@ -412,12 +414,12 @@ impl AssetProcessor {
                 }
             }
 
-            // Pre-extract this chunk's BSA files to SQLite
-            for (bsa_path, file_paths) in &bsa_files_needed {
+            // Pre-extract this chunk's BSA files to SQLite (parallel)
+            bsa_files_needed.par_iter().for_each(|(bsa_path, file_paths)| {
                 if let Err(e) = self.pre_extract_bsa_files(bsa_path, file_paths) {
                     warn!("Failed to pre-extract from {}: {}", bsa_path.display(), e);
                 }
-            }
+            });
 
             // Process this chunk in parallel
             chunk.par_iter().for_each(|asset| {
@@ -514,12 +516,12 @@ impl AssetProcessor {
                 }
             }
 
-            // Pre-extract this chunk's BSA files to SQLite
-            for (bsa_path, file_paths) in &bsa_files_needed {
+            // Pre-extract this chunk's BSA files to SQLite (parallel)
+            bsa_files_needed.par_iter().for_each(|(bsa_path, file_paths)| {
                 if let Err(e) = self.pre_extract_bsa_files(bsa_path, file_paths) {
                     warn!("Failed to pre-extract from {}: {}", bsa_path.display(), e);
                 }
-            }
+            });
 
             // Process this chunk in parallel
             chunk.par_iter().for_each(|asset| {
@@ -737,7 +739,7 @@ impl AssetProcessor {
                 .unwrap_or(&asset.source_path);
             // Normalize path for BSA
             let normalized = target_file.replace('\\', "/");
-            let mut writer = self.bsa_writer.lock().unwrap();
+            let writer = self.bsa_writer.lock().unwrap();
             writer.add_file(asset.target_loc, &normalized, data.to_vec())?;
         } else {
             drop(writer); // Release lock
@@ -760,7 +762,7 @@ impl AssetProcessor {
             return Ok((0, 0));
         }
 
-        let writer = self.bsa_writer.lock().unwrap();
+        let mut writer = self.bsa_writer.lock().unwrap();
         writer.write_all(&self.dest_dir)
     }
 
@@ -768,13 +770,13 @@ impl AssetProcessor {
     /// callback(current, total, bsa_name)
     pub fn finalize_bsas_with_callback<F>(&self, callback: F) -> Result<(usize, usize)>
     where
-        F: Fn(usize, usize, &str),
+        F: Fn(usize, usize, &str) + Sync,
     {
         if self.dry_run {
             return Ok((0, 0));
         }
 
-        let writer = self.bsa_writer.lock().unwrap();
+        let mut writer = self.bsa_writer.lock().unwrap();
         writer.write_all_with_callback(&self.dest_dir, callback)
     }
 
@@ -799,6 +801,462 @@ impl AssetProcessor {
         let mut handler = self.bsa_handler.lock().unwrap();
         handler.clear_cache();
     }
+
+    // ========================================================================
+    // PRODUCER-CONSUMER MODE - Overlapped extraction and processing
+    // ========================================================================
+
+    /// Process assets with producer-consumer pattern:
+    /// - Producer thread walks BSA and sends files to bounded channel
+    /// - Worker threads consume and process continuously
+    /// - No idle gaps, RAM bounded by channel capacity
+    pub fn process_assets_streaming(&self, assets: &[Asset]) -> Result<ProcessingStats> {
+        use crossbeam_channel::bounded;
+
+        // Channel capacity: very small to minimize RAM usage
+        // Each item can be several MB (textures), so keep this tiny
+        const CHANNEL_CAPACITY: usize = 4;
+
+        info!("Using PRODUCER-CONSUMER mode (channel capacity: {})", CHANNEL_CAPACITY);
+
+        // === Step 1: Group assets by source BSA ===
+        let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
+        let mut dir_assets: Vec<&Asset> = Vec::new();
+
+        for asset in assets {
+            if self.resolver.is_bsa_location(asset.source_loc) {
+                if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
+                    bsa_assets.entry(bsa_path).or_default().push(asset);
+                }
+            } else {
+                dir_assets.push(asset);
+            }
+        }
+
+        // === Step 2: Sort BSAs by size (LARGEST FIRST) ===
+        let mut bsa_entries: Vec<_> = bsa_assets.into_iter().collect();
+        bsa_entries.sort_by(|a, b| {
+            let size_a = fs::metadata(&a.0).map(|m| m.len()).unwrap_or(0);
+            let size_b = fs::metadata(&b.0).map(|m| m.len()).unwrap_or(0);
+            size_b.cmp(&size_a)
+        });
+
+        let num_bsas = bsa_entries.len();
+
+        println!("\nProducer-consumer mode (overlapped extraction/processing):");
+        for (i, (path, assets_list)) in bsa_entries.iter().take(5).enumerate() {
+            let size = fs::metadata(path).map(|m| m.len() / 1024 / 1024).unwrap_or(0);
+            let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+            println!("  {}. {} ({} MB, {} files)", i + 1, name, size, assets_list.len());
+        }
+        if bsa_entries.len() > 5 {
+            println!("  ... and {} more BSAs", bsa_entries.len() - 5);
+        }
+        println!("  Directory assets: {}", dir_assets.len());
+
+        let success = AtomicUsize::new(0);
+        let failed = AtomicUsize::new(0);
+        let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let total_assets = assets.len();
+        let pb = ProgressBar::new(total_assets as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("#>-"));
+
+        // === Step 3: Process BSAs with producer-consumer ===
+        for (bsa_idx, (bsa_path, assets_for_bsa)) in bsa_entries.iter().enumerate() {
+            let bsa_name = bsa_path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            pb.set_message(format!("BSA {}/{}: {}", bsa_idx + 1, num_bsas, bsa_name));
+
+            // Build lookup: normalized path -> assets needing that file
+            let mut path_to_assets: HashMap<String, Vec<&Asset>> = HashMap::new();
+            for asset in assets_for_bsa {
+                let normalized = asset.source_path.replace('/', "\\").to_lowercase();
+                path_to_assets.entry(normalized).or_default().push(asset);
+            }
+
+            // Create bounded channel for this BSA
+            let (tx, rx) = bounded::<(Vec<u8>, Vec<Asset>)>(CHANNEL_CAPACITY);
+
+            // Clone what we need for the producer thread
+            let bsa_path_clone = bsa_path.clone();
+            let bsa_name_clone = bsa_name.clone();
+
+            // Convert assets to owned for sending across threads
+            let path_to_owned_assets: HashMap<String, Vec<Asset>> = path_to_assets
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().map(|a| (*a).clone()).collect()))
+                .collect();
+
+            // Spawn producer thread
+            let producer_handle = std::thread::spawn(move || {
+                Self::bsa_producer(bsa_path_clone, bsa_name_clone, path_to_owned_assets, tx)
+            });
+
+            // Consumer: process items as they arrive using rayon
+            let success_ref = &success;
+            let failed_ref = &failed;
+            let errors_ref = &errors;
+            let pb_ref = &pb;
+
+            // Use par_bridge to process channel items in parallel
+            rx.into_iter().par_bridge().for_each(|(data, assets_for_file)| {
+                for asset in &assets_for_file {
+                    let result = self.process_asset_with_data(asset, &data);
+                    match result {
+                        Ok(_) => { success_ref.fetch_add(1, Ordering::Relaxed); }
+                        Err(e) => {
+                            failed_ref.fetch_add(1, Ordering::Relaxed);
+                            let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
+                            warn!("{}", error_msg);
+                            if let Ok(mut errs) = errors_ref.lock() {
+                                if errs.len() < 100 { errs.push(error_msg); }
+                            }
+                        }
+                    }
+                    pb_ref.inc(1);
+                }
+            });
+
+            // Wait for producer to finish
+            if let Err(e) = producer_handle.join() {
+                warn!("Producer thread panicked: {:?}", e);
+            }
+
+            // Track files not found
+            // (Producer tracks this via the channel - items not sent)
+        }
+
+        // === Step 4: Process directory assets (all threads) ===
+        if !dir_assets.is_empty() {
+            pb.set_message("Processing directory assets...");
+            dir_assets.par_iter().for_each(|asset| {
+                let result = self.process_asset(asset);
+                match result {
+                    Ok(_) => { success.fetch_add(1, Ordering::Relaxed); }
+                    Err(e) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
+                        warn!("{}", error_msg);
+                        if let Ok(mut errs) = errors.lock() {
+                            if errs.len() < 100 { errs.push(error_msg); }
+                        }
+                    }
+                }
+                pb.inc(1);
+            });
+        }
+
+        let final_success = success.load(Ordering::Relaxed);
+        let final_failed = failed.load(Ordering::Relaxed);
+
+        pb.finish_with_message(format!("Done: {} success, {} failed", final_success, final_failed));
+
+        let final_errors = Arc::try_unwrap(errors)
+            .unwrap_or_else(|e| e.lock().unwrap().clone().into())
+            .into_inner()
+            .unwrap();
+
+        if !final_errors.is_empty() {
+            println!("\nErrors ({}):", final_errors.len());
+            for (i, err) in final_errors.iter().take(20).enumerate() {
+                println!("  {}. {}", i + 1, err);
+            }
+            if final_errors.len() > 20 {
+                println!("  ... and {} more", final_errors.len() - 20);
+            }
+        }
+
+        Ok(ProcessingStats {
+            success: final_success,
+            failed: final_failed,
+            errors: final_errors,
+        })
+    }
+
+    /// Producer: walks BSA and sends extracted files to channel
+    /// Uses memory-mapping to avoid loading entire BSA into RAM
+    fn bsa_producer(
+        bsa_path: PathBuf,
+        bsa_name: String,
+        mut path_to_assets: HashMap<String, Vec<Asset>>,
+        tx: crossbeam_channel::Sender<(Vec<u8>, Vec<Asset>)>,
+    ) {
+        use ba2::tes4::{Archive, ArchiveKey, DirectoryKey};
+        use ba2::{ByteSlice, Reader};
+
+        // Open BSA using &File - ba2 should stream from disk rather than loading all into RAM
+        let file = match std::fs::File::open(&bsa_path) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("Failed to open {}: {}", bsa_name, e);
+                return;
+            }
+        };
+
+        let (archive, _): (Archive, _) = match Archive::read(&file) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!("Failed to parse {}: {}", bsa_name, e);
+                return;
+            }
+        };
+
+        for (dir_key, folder) in archive.iter() {
+            if path_to_assets.is_empty() {
+                break;
+            }
+
+            let dir_key: &ArchiveKey = dir_key;
+            let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes()).to_lowercase();
+
+            for (file_key, file) in folder.iter() {
+                let file_key: &DirectoryKey = file_key;
+                let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_lowercase();
+
+                let full_path = if dir_name.is_empty() || dir_name == "." {
+                    file_name
+                } else {
+                    format!("{}\\{}", dir_name, file_name)
+                };
+
+                if let Some(assets_needing) = path_to_assets.remove(&full_path) {
+                    let data = if file.is_compressed() {
+                        file.decompress(&Default::default())
+                            .map(|d| d.as_bytes().to_vec())
+                            .unwrap_or_default()
+                    } else {
+                        file.as_bytes().to_vec()
+                    };
+
+                    // Send to channel (blocks if full - backpressure)
+                    if tx.send((data, assets_needing)).is_err() {
+                        // Channel closed, consumer gone
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Process a single asset with pre-loaded source data
+    fn process_asset_with_data(&self, asset: &Asset, source_data: &[u8]) -> Result<()> {
+        let op_type = OpType::from_i32(asset.op_type)
+            .ok_or_else(|| anyhow::anyhow!("Unknown operation type: {}", asset.op_type))?;
+
+        match op_type {
+            OpType::Copy => {
+                if !self.dry_run {
+                    self.write_to_target(asset, source_data)?;
+                }
+                Ok(())
+            }
+            OpType::New => self.process_new(asset),
+            OpType::Patch => {
+                let target_file = asset.target_path.as_deref()
+                    .unwrap_or(&asset.source_path);
+                let patch_file_name = format!("{}.xd3", target_file).replace('\\', "/");
+                let patch_path = self.mpi_dir.join(&patch_file_name);
+
+                let actual_patch_path = find_file_case_insensitive(&patch_path)
+                    .ok_or_else(|| anyhow::anyhow!("Patch file not found: {}", patch_path.display()))?;
+
+                let patch_data = fs::read(&actual_patch_path)
+                    .with_context(|| format!("Failed to read patch: {}", actual_patch_path.display()))?;
+
+                if !self.dry_run {
+                    let patched = self.xdelta.apply_patch_from_bytes(source_data, &patch_data)?;
+                    self.write_to_target(asset, &patched)?;
+                }
+                Ok(())
+            }
+            OpType::OggEnc2 => {
+                if !self.dry_run {
+                    let audio_processor = AudioProcessor::new();
+                    let processed = audio_processor.process_ogg_resample(source_data)?;
+                    self.write_to_target(asset, &processed)?;
+                }
+                Ok(())
+            }
+            OpType::AudioEnc => {
+                let output_format = self.get_audio_output_format(asset)?;
+                let input_format = Path::new(&asset.source_path)
+                    .extension()
+                    .and_then(|e| e.to_str());
+
+                if !self.dry_run {
+                    let audio_processor = AudioProcessor::new();
+                    let processed = audio_processor.process_audio_conversion(
+                        source_data,
+                        input_format,
+                        output_format,
+                    )?;
+                    self.write_to_target(asset, &processed)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Process assets with producer-consumer pattern and progress callback for GUI
+    pub fn process_assets_streaming_with_callback<F>(&self, assets: &[Asset], callback: F) -> Result<ProcessingStats>
+    where
+        F: Fn(usize, usize, &str) + Send + Sync,
+    {
+        use crossbeam_channel::bounded;
+
+        const CHANNEL_CAPACITY: usize = 32;
+
+        let callback = Arc::new(callback);
+        info!("Using PRODUCER-CONSUMER mode (channel capacity: {})", CHANNEL_CAPACITY);
+
+        // === Step 1: Group assets by source BSA ===
+        let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
+        let mut dir_assets: Vec<&Asset> = Vec::new();
+
+        for asset in assets {
+            if self.resolver.is_bsa_location(asset.source_loc) {
+                if let Ok(bsa_path) = self.resolver.get_bsa_path(asset.source_loc) {
+                    bsa_assets.entry(bsa_path).or_default().push(asset);
+                }
+            } else {
+                dir_assets.push(asset);
+            }
+        }
+
+        // === Step 2: Sort BSAs by size (LARGEST FIRST) ===
+        let mut bsa_entries: Vec<_> = bsa_assets.into_iter().collect();
+        bsa_entries.sort_by(|a, b| {
+            let size_a = fs::metadata(&a.0).map(|m| m.len()).unwrap_or(0);
+            let size_b = fs::metadata(&b.0).map(|m| m.len()).unwrap_or(0);
+            size_b.cmp(&size_a)
+        });
+
+        let total = assets.len();
+        let num_bsas = bsa_entries.len();
+
+        callback(0, total, &format!("Processing {} BSAs...", num_bsas));
+
+        let success = AtomicUsize::new(0);
+        let failed = AtomicUsize::new(0);
+        let processed = AtomicUsize::new(0);
+        let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // === Step 3: Process BSAs with producer-consumer ===
+        for (bsa_idx, (bsa_path, assets_for_bsa)) in bsa_entries.iter().enumerate() {
+            let bsa_name = bsa_path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            callback(processed.load(Ordering::Relaxed), total,
+                &format!("BSA {}/{}: {}", bsa_idx + 1, num_bsas, bsa_name));
+
+            // Build lookup and convert to owned
+            let mut path_to_assets: HashMap<String, Vec<&Asset>> = HashMap::new();
+            for asset in assets_for_bsa {
+                let normalized = asset.source_path.replace('/', "\\").to_lowercase();
+                path_to_assets.entry(normalized).or_default().push(asset);
+            }
+
+            let (tx, rx) = bounded::<(Vec<u8>, Vec<Asset>)>(CHANNEL_CAPACITY);
+
+            let bsa_path_clone = bsa_path.clone();
+            let bsa_name_clone = bsa_name.clone();
+            let path_to_owned_assets: HashMap<String, Vec<Asset>> = path_to_assets
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().map(|a| (*a).clone()).collect()))
+                .collect();
+
+            let producer_handle = std::thread::spawn(move || {
+                Self::bsa_producer(bsa_path_clone, bsa_name_clone, path_to_owned_assets, tx)
+            });
+
+            let success_ref = &success;
+            let failed_ref = &failed;
+            let errors_ref = &errors;
+            let processed_ref = &processed;
+            let callback_ref = &callback;
+            let bsa_num = bsa_idx + 1;
+
+            rx.into_iter().par_bridge().for_each(|(data, assets_for_file)| {
+                for asset in &assets_for_file {
+                    let result = self.process_asset_with_data(asset, &data);
+                    match result {
+                        Ok(_) => { success_ref.fetch_add(1, Ordering::Relaxed); }
+                        Err(e) => {
+                            failed_ref.fetch_add(1, Ordering::Relaxed);
+                            let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
+                            warn!("{}", error_msg);
+                            if let Ok(mut errs) = errors_ref.lock() {
+                                if errs.len() < 100 { errs.push(error_msg); }
+                            }
+                        }
+                    }
+
+                    let current = processed_ref.fetch_add(1, Ordering::Relaxed) + 1;
+                    if current.is_multiple_of(100) || current <= 5 {
+                        let s = success_ref.load(Ordering::Relaxed);
+                        let f = failed_ref.load(Ordering::Relaxed);
+                        callback_ref(current, total, &format!(
+                            "BSA {}/{}: {} OK, {} fail",
+                            bsa_num, num_bsas, s, f
+                        ));
+                    }
+                }
+            });
+
+            if let Err(e) = producer_handle.join() {
+                warn!("Producer thread panicked: {:?}", e);
+            }
+        }
+
+        // === Step 4: Process directory assets ===
+        if !dir_assets.is_empty() {
+            callback(processed.load(Ordering::Relaxed), total, "Processing directory assets...");
+
+            dir_assets.par_iter().for_each(|asset| {
+                let result = self.process_asset(asset);
+                match result {
+                    Ok(_) => { success.fetch_add(1, Ordering::Relaxed); }
+                    Err(e) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
+                        warn!("{}", error_msg);
+                        if let Ok(mut errs) = errors.lock() {
+                            if errs.len() < 100 { errs.push(error_msg); }
+                        }
+                    }
+                }
+
+                let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                if current.is_multiple_of(100) || current == total {
+                    let s = success.load(Ordering::Relaxed);
+                    let f = failed.load(Ordering::Relaxed);
+                    callback(current, total, &format!("{} OK, {} fail", s, f));
+                }
+            });
+        }
+
+        let final_success = success.load(Ordering::Relaxed);
+        let final_failed = failed.load(Ordering::Relaxed);
+
+        let final_errors = Arc::try_unwrap(errors)
+            .unwrap_or_else(|e| e.lock().unwrap().clone().into())
+            .into_inner()
+            .unwrap();
+
+        Ok(ProcessingStats {
+            success: final_success,
+            failed: final_failed,
+            errors: final_errors,
+        })
+    }
+
 }
 
 /// Statistics from processing

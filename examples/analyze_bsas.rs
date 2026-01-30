@@ -1,5 +1,5 @@
 use ba2::tes4::Archive;
-use ba2::{ByteSlice, Reader};
+use ba2::Reader;
 use std::path::Path;
 
 fn analyze_bsa(path: &Path) -> (usize, usize, usize) {

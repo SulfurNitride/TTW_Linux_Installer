@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::fs;
 use std::io::Write;
+use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use chrono::Local;
 
@@ -431,6 +432,8 @@ fn run_installation(
     log_messages: Arc<Mutex<Vec<String>>>,
     progress: Arc<AtomicU32>,
 ) -> Result<(), String> {
+    let install_start = Instant::now();
+
     // Create log file
     let log_path = get_log_path("Installation");
     let log_file = Arc::new(Mutex::new(
@@ -546,18 +549,18 @@ fn run_installation(
         output_path.clone(),
         &locations,
         &bsa_targets,
-    );
+    ).map_err(|e| format!("Failed to create asset processor: {}", e))?;
 
     std::fs::create_dir_all(&output_path)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
-    // Phase 3: Process assets (10-80%)
-    log("Processing assets...");
+    // Phase 3: Process assets (10-80%) - Streaming mode for minimal RAM usage
+    log("Processing assets (streaming mode)...");
     let progress_clone = Arc::clone(&progress);
     let log_messages_clone2 = Arc::clone(&log_messages);
     let log_file_clone2 = Arc::clone(&log_file);
 
-    let stats = processor.process_assets_with_callback(&assets, move |current, total, msg| {
+    let stats = processor.process_assets_streaming_with_callback(&assets, move |current, total, msg| {
         // Update progress: 10% + (current/total * 70%)
         let pct = 1000 + ((current as u32 * 7000) / total as u32);
         progress_clone.store(pct, Ordering::Relaxed);
@@ -622,7 +625,12 @@ fn run_installation(
     }
 
     progress.store(10000, Ordering::Relaxed); // 100%
-    log("Installation complete!");
+
+    let elapsed = install_start.elapsed();
+    let minutes = elapsed.as_secs() / 60;
+    let seconds = elapsed.as_secs() % 60;
+    log(&format!("Installation complete! Total time: {}m {}s", minutes, seconds));
+
     Ok(())
 }
 
