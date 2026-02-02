@@ -287,8 +287,16 @@ fn run_install(
     let stats = processor.process_assets_streaming(&assets)?;
 
     info!("Processing complete: {} success, {} failed", stats.success, stats.failed);
-    for err in &stats.errors {
-        error!("Asset error: {}", err);
+    if !stats.errors.is_empty() {
+        println!("\n=== Errors ({}) ===", stats.errors.len());
+        let show_count = std::cmp::min(10, stats.errors.len());
+        for err in stats.errors.iter().take(show_count) {
+            println!("  {}", err);
+            error!("Asset error: {}", err);
+        }
+        if stats.errors.len() > show_count {
+            println!("  ... and {} more errors (see log file for full list)", stats.errors.len() - show_count);
+        }
     }
 
     // Write BSA archives

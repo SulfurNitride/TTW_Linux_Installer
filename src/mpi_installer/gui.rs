@@ -580,6 +580,17 @@ fn run_installation(
     }).map_err(|e| format!("Failed to process assets: {}", e))?;
 
     log(&format!("Processed: {} success, {} failed", stats.success, stats.failed));
+
+    // Show first few errors to help debugging
+    if !stats.errors.is_empty() {
+        let show_count = std::cmp::min(5, stats.errors.len());
+        for err in stats.errors.iter().take(show_count) {
+            log(&format!("  Error: {}", err));
+        }
+        if stats.errors.len() > show_count {
+            log(&format!("  ... and {} more errors", stats.errors.len() - show_count));
+        }
+    }
     progress.store(8000, Ordering::Relaxed); // 80%
 
     // Phase 4: Write BSA archives (80-95%)

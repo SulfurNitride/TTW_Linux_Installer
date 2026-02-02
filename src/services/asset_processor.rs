@@ -546,12 +546,10 @@ impl AssetProcessor {
                 }
 
                 let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                let s = success.load(Ordering::Relaxed);
-                let f = failed.load(Ordering::Relaxed);
 
                 let callback_interval = if total > 1000 { 50 } else if total > 100 { 10 } else { 1 };
                 if current.is_multiple_of(callback_interval) || current == total || current <= 5 {
-                    callback(current, total, &format!("Chunk {}/{}: {} OK, {} failed", chunk_idx + 1, num_chunks, s, f));
+                    callback(current, total, &format!("Chunk {}/{}", chunk_idx + 1, num_chunks));
                 }
             });
 
@@ -1200,11 +1198,9 @@ impl AssetProcessor {
 
                     let current = processed_ref.fetch_add(1, Ordering::Relaxed) + 1;
                     if current.is_multiple_of(100) || current <= 5 {
-                        let s = success_ref.load(Ordering::Relaxed);
-                        let f = failed_ref.load(Ordering::Relaxed);
                         callback_ref(current, total, &format!(
-                            "BSA {}/{}: {} OK, {} fail",
-                            bsa_num, num_bsas, s, f
+                            "BSA {}/{}",
+                            bsa_num, num_bsas
                         ));
                     }
                 }
@@ -1235,15 +1231,18 @@ impl AssetProcessor {
 
                 let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 if current.is_multiple_of(100) || current == total {
-                    let s = success.load(Ordering::Relaxed);
-                    let f = failed.load(Ordering::Relaxed);
-                    callback(current, total, &format!("{} OK, {} fail", s, f));
+                    callback(current, total, "Processing loose files");
                 }
             });
         }
 
         let final_success = success.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
+
+        // Log summary at end
+        if final_failed > 0 {
+            warn!("Processing complete: {} succeeded, {} failed", final_success, final_failed);
+        }
 
         let final_errors = Arc::try_unwrap(errors)
             .unwrap_or_else(|e| e.lock().unwrap().clone().into())
