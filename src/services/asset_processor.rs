@@ -177,7 +177,7 @@ impl AssetProcessor {
         locations: &[Location],
         bsa_targets: &[Location],  // Separate BSA target locations (may come from different profile)
     ) -> Result<Self> {
-        let mut bsa_writer = BsaWriterManager::new();
+        let mut bsa_writer = BsaWriterManager::new(dest_dir.clone());
 
         let mut type_counts = std::collections::HashMap::new();
         for loc in locations.iter() {

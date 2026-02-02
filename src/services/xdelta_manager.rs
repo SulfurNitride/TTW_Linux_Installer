@@ -8,12 +8,14 @@ use tracing::info;
 pub struct XdeltaManager {
     /// Path to the xdelta3 binary
     xdelta_path: PathBuf,
+    /// Directory for temp files (uses output dir, not system temp)
+    staging_dir: PathBuf,
 }
 
 impl XdeltaManager {
-    /// Create manager with path to xdelta3 binary
-    pub fn new(xdelta_path: PathBuf) -> Self {
-        Self { xdelta_path }
+    /// Create manager with path to xdelta3 binary and staging directory
+    pub fn new(xdelta_path: PathBuf, staging_dir: PathBuf) -> Self {
+        Self { xdelta_path, staging_dir }
     }
 
     /// Test if a binary actually works
@@ -172,9 +174,9 @@ impl XdeltaManager {
     }
 
     /// Ensure xdelta3 is available
-    pub fn ensure_available() -> Result<Self> {
+    pub fn ensure_available(staging_dir: PathBuf) -> Result<Self> {
         if let Some(path) = Self::find_xdelta3() {
-            return Ok(Self::new(path));
+            return Ok(Self::new(path, staging_dir));
         }
 
         // Provide helpful installation instructions
@@ -251,9 +253,11 @@ impl XdeltaManager {
         source_data: &[u8],
         patch_data: &[u8],
     ) -> Result<Vec<u8>> {
-        // Create temp files for the operation
-        let temp_dir = tempfile::tempdir()
-            .context("Failed to create temp directory")?;
+        // Create temp files in staging directory (not system temp - may be tmpfs with limited space)
+        let temp_dir = tempfile::Builder::new()
+            .prefix(".ttw_xdelta_")
+            .tempdir_in(&self.staging_dir)
+            .context("Failed to create temp directory for xdelta")?;
 
         let source_path = temp_dir.path().join("source");
         let patch_path = temp_dir.path().join("patch.xdelta");

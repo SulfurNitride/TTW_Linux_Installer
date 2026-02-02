@@ -539,7 +539,7 @@ fn run_installation(
     progress.store(1200, Ordering::Relaxed); // 12%
 
     log("Checking xdelta3...");
-    let xdelta = XdeltaManager::ensure_available()
+    let xdelta = XdeltaManager::ensure_available(output_path.clone())
         .map_err(|e| format!("Failed to get xdelta3: {}", e))?;
 
     let processor = AssetProcessor::new(

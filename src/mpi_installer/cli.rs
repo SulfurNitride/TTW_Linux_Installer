@@ -264,7 +264,7 @@ fn run_install(
 
     // Ensure xdelta3 is available
     info!("Checking xdelta3...");
-    let xdelta = XdeltaManager::ensure_available()?;
+    let xdelta = XdeltaManager::ensure_available(dest.to_path_buf())?;
     info!("xdelta3: {}", xdelta.path().display());
 
     // Create asset processor

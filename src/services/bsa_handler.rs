@@ -508,35 +508,17 @@ pub struct StreamingBsaBuilder {
 }
 
 impl StreamingBsaBuilder {
-    /// Create a new streaming BSA builder with a temporary staging file
-    pub fn new() -> Result<Self> {
-        Self::with_settings(
-            ArchiveFlags::DIRECTORY_STRINGS
-                | ArchiveFlags::FILE_STRINGS
-                | ArchiveFlags::COMPRESSED
-                | ArchiveFlags::RETAIN_DIRECTORY_NAMES
-                | ArchiveFlags::RETAIN_FILE_NAMES
-                | ArchiveFlags::RETAIN_FILE_NAME_OFFSETS,
-            ArchiveTypes::empty(),
-            Version::v104,
-        )
-    }
-
     /// Create with specific archive settings
     pub fn with_settings(
+        staging_dir: &Path,
         flags: ArchiveFlags,
         types: ArchiveTypes,
         version: Version,
     ) -> Result<Self> {
-        // Create temp file for staging
-        let staging_path = std::env::temp_dir().join(format!(
-            "ttw_bsa_staging_{}.tmp",
-            std::process::id()
-        ));
-
-        // Use a unique suffix to allow multiple builders
-        let staging_path = staging_path.with_extension(format!(
-            "{}.tmp",
+        // Create staging file in the output directory (not temp - temp may be tmpfs with limited space)
+        let staging_path = staging_dir.join(format!(
+            ".ttw_bsa_staging_{}_{}.tmp",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -711,12 +693,15 @@ pub struct BsaWriterManager {
     /// BSA builders keyed by location index
     /// Uses StreamingBsaBuilder for disk-backed storage instead of RAM
     builders: HashMap<i32, (String, StreamingBsaBuilder)>, // (bsa_name, builder)
+    /// Directory for staging files (uses output dir, not temp)
+    staging_dir: PathBuf,
 }
 
 impl BsaWriterManager {
-    pub fn new() -> Self {
+    pub fn new(staging_dir: PathBuf) -> Self {
         Self {
             builders: HashMap::new(),
+            staging_dir,
         }
     }
 
@@ -808,8 +793,8 @@ impl BsaWriterManager {
             ArchiveTypes::MISC
         };
 
-        // Create streaming builder (writes to temp file instead of RAM)
-        let builder = StreamingBsaBuilder::with_settings(flags, types, version)
+        // Create streaming builder (writes to staging file in output dir, not temp)
+        let builder = StreamingBsaBuilder::with_settings(&self.staging_dir, flags, types, version)
             .with_context(|| format!("Failed to create streaming BSA builder for {}", bsa_name))?;
 
         // Get version string for logging
@@ -955,8 +940,3 @@ impl BsaWriterManager {
     }
 }
 
-impl Default for BsaWriterManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
