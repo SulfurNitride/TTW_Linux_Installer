@@ -26,16 +26,8 @@ jobs:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Cache Rust
+      uses: Swatinem/rust-cache@v2
 
     - name: Build release
       run: cargo build --release
@@ -68,16 +60,8 @@ jobs:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Cache Rust
+      uses: Swatinem/rust-cache@v2
 
     - name: Build release
       run: cargo build --release
