@@ -263,8 +263,8 @@ impl AssetProcessor {
             }
         }
 
-        // Create SQLite-based cache (uses disk instead of RAM)
-        let bsa_cache = BsaCache::new()
+        // Create SQLite-based cache in the output directory
+        let bsa_cache = BsaCache::new_at(dest_dir.clone())
             .context("Failed to create SQLite BSA cache")?;
 
         Ok(Self {

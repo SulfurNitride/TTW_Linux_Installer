@@ -17,13 +17,27 @@ pub struct BsaCache {
 }
 
 impl BsaCache {
-    /// Create a new SQLite cache in a temp file
-    pub fn new() -> Result<Self> {
-        // Create temp file for database
-        let db_path = std::env::temp_dir().join(format!("ttw_bsa_cache_{}.db", std::process::id()));
+    /// Create a new SQLite cache in the specified directory
+    pub fn new_at(base_dir: PathBuf) -> Result<Self> {
+        let db_path = base_dir.join(format!(".ttw_bsa_cache_{}.db", std::process::id()));
+
+        // If a stale file exists from a crashed run, try to remove it
+        if db_path.exists() {
+            if let Err(e) = std::fs::remove_file(&db_path) {
+                warn!("Failed to remove stale cache file {}: {}", db_path.display(), e);
+            }
+        }
 
         let conn = Connection::open(&db_path)
-            .with_context(|| format!("Failed to create SQLite cache at {}", db_path.display()))?;
+            .with_context(|| format!(
+                "Failed to create SQLite cache at {}\n\
+                Possible causes:\n\
+                - Disk is full (check with 'df -h {}')\n\
+                - Permission denied (check directory permissions)\n\
+                - Filesystem is read-only",
+                db_path.display(),
+                base_dir.display()
+            ))?;
 
         // Configure for performance with minimal memory footprint
         conn.execute_batch(
