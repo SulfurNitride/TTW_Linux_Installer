@@ -321,16 +321,9 @@ fn run_install(
     );
     if !stats.errors.is_empty() {
         println!("\n=== Errors ({}) ===", stats.errors.len());
-        let show_count = std::cmp::min(10, stats.errors.len());
-        for err in stats.errors.iter().take(show_count) {
+        for err in &stats.errors {
             println!("  {}", err);
             error!("Asset error: {}", err);
-        }
-        if stats.errors.len() > show_count {
-            println!(
-                "  ... and {} more errors (see log file for full list)",
-                stats.errors.len() - show_count
-            );
         }
     }
 

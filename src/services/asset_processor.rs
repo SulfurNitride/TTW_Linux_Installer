@@ -913,7 +913,7 @@ impl AssetProcessor {
                             let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
                             warn!("{}", error_msg);
                             if let Ok(mut errs) = errors_ref.lock() {
-                                if errs.len() < 100 { errs.push(error_msg); }
+                                errs.push(error_msg);
                             }
                         }
                     }
@@ -942,7 +942,7 @@ impl AssetProcessor {
                         let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
                         warn!("{}", error_msg);
                         if let Ok(mut errs) = errors.lock() {
-                            if errs.len() < 100 { errs.push(error_msg); }
+                            errs.push(error_msg);
                         }
                     }
                 }
@@ -1191,7 +1191,7 @@ impl AssetProcessor {
                             let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
                             warn!("{}", error_msg);
                             if let Ok(mut errs) = errors_ref.lock() {
-                                if errs.len() < 100 { errs.push(error_msg); }
+                                errs.push(error_msg);
                             }
                         }
                     }
@@ -1224,7 +1224,7 @@ impl AssetProcessor {
                         let error_msg = format!("{} (op={}): {}", asset.source_path, asset.op_type, e);
                         warn!("{}", error_msg);
                         if let Ok(mut errs) = errors.lock() {
-                            if errs.len() < 100 { errs.push(error_msg); }
+                            errs.push(error_msg);
                         }
                     }
                 }
