@@ -1,14 +1,14 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use ttw_installer::{
     models::InstallConfig,
     services::{
-        MpiExtractor, ManifestLoader, LocationResolver,
-        AssetProcessor, XdeltaManager, Logger, FileVerifier,
+        AssetProcessor, FileVerifier, LocationResolver, Logger, ManifestLoader, MpiExtractor,
+        XdeltaManager,
     },
 };
 
@@ -98,7 +98,11 @@ fn main() -> Result<()> {
     // Set up panic handler to log crashes
     std::panic::set_hook(Box::new(|panic_info| {
         let crash_log = std::env::current_exe()
-            .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("crash.log"))
+            .map(|p| {
+                p.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("crash.log")
+            })
             .unwrap_or_else(|_| PathBuf::from("crash.log"));
 
         let message = format!(
@@ -124,21 +128,27 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Install { mpi, fo3, fnv, oblivion, dest, dry_run } => {
-            run_install(&mpi, fo3.as_deref(), fnv.as_deref(), oblivion.as_deref(), &dest, dry_run)
-        }
-        Commands::Extract { mpi, output } => {
-            run_extract(&mpi, &output)
-        }
-        Commands::Inspect { mpi, verbose } => {
-            run_inspect(&mpi, verbose)
-        }
+        Commands::Install {
+            mpi,
+            fo3,
+            fnv,
+            oblivion,
+            dest,
+            dry_run,
+        } => run_install(
+            &mpi,
+            fo3.as_deref(),
+            fnv.as_deref(),
+            oblivion.as_deref(),
+            &dest,
+            dry_run,
+        ),
+        Commands::Extract { mpi, output } => run_extract(&mpi, &output),
+        Commands::Inspect { mpi, verbose } => run_inspect(&mpi, verbose),
         Commands::Verify { fo3, fnv, oblivion } => {
             run_verify(fo3.as_deref(), fnv.as_deref(), oblivion.as_deref())
         }
-        Commands::Logs { count } => {
-            run_logs(count)
-        }
+        Commands::Logs { count } => run_logs(count),
     }
 }
 
@@ -148,7 +158,7 @@ fn run_install(
     fnv: Option<&Path>,
     oblivion: Option<&Path>,
     dest: &Path,
-    dry_run: bool
+    dry_run: bool,
 ) -> Result<()> {
     let install_start = Instant::now();
     println!("=== MPI Linux Installer ===\n");
@@ -161,7 +171,10 @@ fn run_install(
     }
     if let Some(fnv_path) = fnv {
         if !fnv_path.exists() {
-            bail!("Fallout New Vegas directory not found: {}", fnv_path.display());
+            bail!(
+                "Fallout New Vegas directory not found: {}",
+                fnv_path.display()
+            );
         }
     }
     if let Some(oblivion_path) = oblivion {
@@ -190,11 +203,13 @@ fn run_install(
     let manifest = ManifestLoader::load_from_file(&manifest_path)?;
 
     // Get package name for logging
-    let package_name = manifest.package
+    let package_name = manifest
+        .package
         .as_ref()
         .and_then(|p| p.title.clone())
         .unwrap_or_else(|| "Unknown".to_string());
-    let package_version = manifest.package
+    let package_version = manifest
+        .package
         .as_ref()
         .and_then(|p| p.version.clone())
         .unwrap_or_else(|| "?".to_string());
@@ -205,10 +220,18 @@ fn run_install(
     info!("Package: {} v{}", package_name, package_version);
     info!("MPI path: {}", mpi_path.display());
     info!("Destination: {}", dest.display());
-    if let Some(p) = fo3 { info!("Fallout 3: {}", p.display()); }
-    if let Some(p) = fnv { info!("Fallout NV: {}", p.display()); }
-    if let Some(p) = oblivion { info!("Oblivion: {}", p.display()); }
-    if dry_run { warn!("DRY RUN MODE - No files will be written"); }
+    if let Some(p) = fo3 {
+        info!("Fallout 3: {}", p.display());
+    }
+    if let Some(p) = fnv {
+        info!("Fallout NV: {}", p.display());
+    }
+    if let Some(p) = oblivion {
+        info!("Oblivion: {}", p.display());
+    }
+    if dry_run {
+        warn!("DRY RUN MODE - No files will be written");
+    }
 
     // Parse assets
     let assets = ManifestLoader::parse_assets(&manifest)?;
@@ -228,16 +251,21 @@ fn run_install(
     // Create config with provided paths (empty string if not provided)
     let destination_path = dest.to_string_lossy().to_string();
     let config = InstallConfig {
-        fallout3_root: fo3.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        falloutnv_root: fnv.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        oblivion_root: oblivion.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        fallout3_root: fo3
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        falloutnv_root: fnv
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        oblivion_root: oblivion
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
         destination_path: destination_path.clone(),
         mpi_package_path: mpi_dir.to_string_lossy().to_string(),
     };
 
     // Create location resolver with manifest variables
-    let resolver = LocationResolver::new(locations.clone(), config)
-        .with_variables(&variables);
+    let resolver = LocationResolver::new(locations.clone(), config).with_variables(&variables);
     resolver.print_locations();
 
     // Run pre-installation checks (hash verification, file existence, etc.)
@@ -275,7 +303,8 @@ fn run_install(
         dest.to_path_buf(),
         &locations,
         &bsa_targets,
-    )?.with_dry_run(dry_run);
+    )?
+    .with_dry_run(dry_run);
 
     // Create destination directory
     if !dry_run {
@@ -286,7 +315,10 @@ fn run_install(
     info!("=== Processing Assets (Streaming Mode) ===");
     let stats = processor.process_assets_streaming(&assets)?;
 
-    info!("Processing complete: {} success, {} failed", stats.success, stats.failed);
+    info!(
+        "Processing complete: {} success, {} failed",
+        stats.success, stats.failed
+    );
     if !stats.errors.is_empty() {
         println!("\n=== Errors ({}) ===", stats.errors.len());
         let show_count = std::cmp::min(10, stats.errors.len());
@@ -295,7 +327,10 @@ fn run_install(
             error!("Asset error: {}", err);
         }
         if stats.errors.len() > show_count {
-            println!("  ... and {} more errors (see log file for full list)", stats.errors.len() - show_count);
+            println!(
+                "  ... and {} more errors (see log file for full list)",
+                stats.errors.len() - show_count
+            );
         }
     }
 
@@ -304,19 +339,58 @@ fn run_install(
     info!("BSA archives: {} created, {} failed", bsa_success, bsa_fail);
 
     // Execute post-installation commands (renames, etc.)
+    let mut post_success = 0usize;
+    let mut post_fail = 0usize;
     let post_commands = ManifestLoader::get_post_commands(&manifest);
     if !post_commands.is_empty() {
         println!("\n=== Executing Post-Installation Commands ===");
-        let (post_success, post_fail) = ManifestLoader::execute_post_commands(&post_commands, &destination_path)?;
-        info!("Post-commands: {} success, {} failed", post_success, post_fail);
+        (post_success, post_fail) =
+            ManifestLoader::execute_post_commands(&post_commands, &destination_path)?;
+        info!(
+            "Post-commands: {} success, {} failed",
+            post_success, post_fail
+        );
     }
 
     // Log summary
     logger.log_summary(stats.success, stats.failed, bsa_success, bsa_fail);
 
+    let missing_patch_errors = stats
+        .errors
+        .iter()
+        .filter(|e| e.contains("Patch file not found"))
+        .count();
+
+    let mut failure_reasons: Vec<String> = Vec::new();
+    if stats.failed > 0 {
+        failure_reasons.push(format!("{} asset operations failed", stats.failed));
+    }
+    if bsa_fail > 0 {
+        failure_reasons.push(format!("{} BSA archives failed to write", bsa_fail));
+    }
+    if post_fail > 0 {
+        failure_reasons.push(format!("{} post-install commands failed", post_fail));
+    }
+
+    let failure_message = if failure_reasons.is_empty() {
+        None
+    } else if missing_patch_errors > 0 {
+        Some(format!(
+            "{}. Detected {} missing patch files (.xd3). This usually means the extracted MPI package is incomplete or mismatched for this manifest.",
+            failure_reasons.join("; "),
+            missing_patch_errors
+        ))
+    } else {
+        Some(failure_reasons.join("; "))
+    };
+
     // Cleanup
     if cleanup_needed {
         MpiExtractor::cleanup_temp(&mpi_dir)?;
+    }
+
+    if let Some(message) = failure_message {
+        bail!("Installation failed: {}", message);
     }
 
     let elapsed = install_start.elapsed();
@@ -385,8 +459,10 @@ fn run_inspect(mpi_path: &Path, verbose: bool) -> Result<()> {
     if verbose {
         println!("\nAssets (first 20):");
         for (i, asset) in assets.iter().take(20).enumerate() {
-            println!("  [{}] OpType:{} {} -> loc:{}",
-                i, asset.op_type, asset.source_path, asset.target_loc);
+            println!(
+                "  [{}] OpType:{} {} -> loc:{}",
+                i, asset.op_type, asset.source_path, asset.target_loc
+            );
         }
         if assets.len() > 20 {
             println!("  ... and {} more assets", assets.len() - 20);
@@ -447,7 +523,7 @@ fn run_verify(fo3: Option<&Path>, fnv: Option<&Path>, oblivion: Option<&Path>) -
 fn find_manifest(mpi_dir: &Path) -> Result<PathBuf> {
     // Look for common manifest locations
     let candidates = [
-        "_package/index.json",      // TTW MPI format
+        "_package/index.json", // TTW MPI format
         "manifest.json",
         "Manifest.json",
         "TTW.manifest.json",
@@ -467,7 +543,11 @@ fn find_manifest(mpi_dir: &Path) -> Result<PathBuf> {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_lowercase();
         if (name.contains("manifest") || name == "index.json")
-            && entry.path().extension().map(|e| e == "json").unwrap_or(false)
+            && entry
+                .path()
+                .extension()
+                .map(|e| e == "json")
+                .unwrap_or(false)
         {
             return Ok(entry.path().to_path_buf());
         }
@@ -574,7 +654,8 @@ fn run_logs(count: usize) -> Result<()> {
     }
 
     for (i, log_path) in logs.iter().enumerate() {
-        let filename = log_path.file_name()
+        let filename = log_path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "?".to_string());
 

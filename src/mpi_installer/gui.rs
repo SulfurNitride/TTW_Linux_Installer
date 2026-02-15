@@ -1,19 +1,18 @@
+use chrono::Local;
 use eframe::egui;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::thread;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
-use serde::{Deserialize, Serialize};
-use chrono::Local;
 
 use ttw_installer::{
     models::InstallConfig,
     services::{
-        MpiExtractor, ManifestLoader, LocationResolver,
-        AssetProcessor, XdeltaManager, FileVerifier,
+        AssetProcessor, FileVerifier, LocationResolver, ManifestLoader, MpiExtractor, XdeltaManager,
     },
 };
 
@@ -40,7 +39,11 @@ impl UserConfig {
 
         // Fallback: next to executable (for portable mode)
         std::env::current_exe()
-            .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("mpi_installer.json"))
+            .map(|p| {
+                p.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("mpi_installer.json")
+            })
             .unwrap_or_else(|_| PathBuf::from("mpi_installer.json"))
     }
 
@@ -76,8 +79,15 @@ fn get_log_path(package_name: &str) -> PathBuf {
     let _ = fs::create_dir_all(&logs_dir);
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
-    let safe_name: String = package_name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+    let safe_name: String = package_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     logs_dir.join(format!("{}_{}.log", timestamp, safe_name))
@@ -87,7 +97,11 @@ fn main() -> eframe::Result<()> {
     // Set up panic handler to log crashes
     std::panic::set_hook(Box::new(|panic_info| {
         let crash_log = std::env::current_exe()
-            .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("crash.log"))
+            .map(|p| {
+                p.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("crash.log")
+            })
             .unwrap_or_else(|_| PathBuf::from("crash.log"));
 
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
@@ -147,7 +161,7 @@ struct MpiInstallerApp {
 
     // State
     status: InstallStatus,
-    progress: Arc<AtomicU32>,  // Progress as percentage * 100 (0-10000 for 0.00%-100.00%)
+    progress: Arc<AtomicU32>, // Progress as percentage * 100 (0-10000 for 0.00%-100.00%)
     log_messages: Arc<Mutex<Vec<String>>>,
 
     // Installation thread handle
@@ -196,7 +210,8 @@ impl eframe::App for MpiInstallerApp {
                         } else {
                             "Unknown panic".to_string()
                         };
-                        self.status = InstallStatus::Failed(format!("Thread panicked: {}", panic_msg));
+                        self.status =
+                            InstallStatus::Failed(format!("Thread panicked: {}", panic_msg));
                         self.add_log(&format!("Thread panicked: {}", panic_msg));
                     }
                 }
@@ -219,8 +234,7 @@ impl eframe::App for MpiInstallerApp {
             // Progress bar (shared)
             ui.horizontal(|ui| {
                 let progress_value = self.progress.load(Ordering::Relaxed) as f32 / 10000.0;
-                let progress_bar = egui::ProgressBar::new(progress_value)
-                    .show_percentage();
+                let progress_bar = egui::ProgressBar::new(progress_value).show_percentage();
                 ui.add_sized([680.0, 20.0], progress_bar);
 
                 let status_text = match &self.status {
@@ -287,7 +301,7 @@ impl MpiInstallerApp {
                 ui.add_sized(
                     [500.0, 20.0],
                     egui::TextEdit::singleline(&mut self.fo3_path)
-                        .hint_text("Path to Fallout 3 installation (optional)")
+                        .hint_text("Path to Fallout 3 installation (optional)"),
                 );
                 if ui.button("Browse...").clicked() {
                     if let Some(path) = pick_folder() {
@@ -302,7 +316,7 @@ impl MpiInstallerApp {
                 ui.add_sized(
                     [500.0, 20.0],
                     egui::TextEdit::singleline(&mut self.fnv_path)
-                        .hint_text("Path to Fallout New Vegas installation (optional)")
+                        .hint_text("Path to Fallout New Vegas installation (optional)"),
                 );
                 if ui.button("Browse...").clicked() {
                     if let Some(path) = pick_folder() {
@@ -317,7 +331,7 @@ impl MpiInstallerApp {
                 ui.add_sized(
                     [500.0, 20.0],
                     egui::TextEdit::singleline(&mut self.oblivion_path)
-                        .hint_text("Path to Oblivion installation (optional)")
+                        .hint_text("Path to Oblivion installation (optional)"),
                 );
                 if ui.button("Browse...").clicked() {
                     if let Some(path) = pick_folder() {
@@ -332,7 +346,7 @@ impl MpiInstallerApp {
                 ui.add_sized(
                     [500.0, 20.0],
                     egui::TextEdit::singleline(&mut self.mpi_path)
-                        .hint_text("Path to .mpi file or extracted package folder")
+                        .hint_text("Path to .mpi file or extracted package folder"),
                 );
                 if ui.button("Browse...").clicked() {
                     if let Some(path) = pick_mpi_file() {
@@ -346,7 +360,7 @@ impl MpiInstallerApp {
                 ui.add_sized(
                     [500.0, 20.0],
                     egui::TextEdit::singleline(&mut self.output_path)
-                        .hint_text("Where to install output files")
+                        .hint_text("Where to install output files"),
                 );
                 if ui.button("Browse...").clicked() {
                     if let Some(path) = pick_folder() {
@@ -364,9 +378,8 @@ impl MpiInstallerApp {
             && !self.mpi_path.is_empty()
             && !self.output_path.is_empty();
 
-        let button = egui::Button::new(
-            egui::RichText::new("Start Installation").size(16.0)
-        ).min_size(egui::vec2(760.0, 30.0));
+        let button = egui::Button::new(egui::RichText::new("Start Installation").size(16.0))
+            .min_size(egui::vec2(760.0, 30.0));
 
         if ui.add_enabled(can_install, button).clicked() {
             self.start_installation();
@@ -385,9 +398,21 @@ impl MpiInstallerApp {
         }
 
         // Clone values for the thread
-        let fo3_path = if self.fo3_path.is_empty() { None } else { Some(PathBuf::from(&self.fo3_path)) };
-        let fnv_path = if self.fnv_path.is_empty() { None } else { Some(PathBuf::from(&self.fnv_path)) };
-        let oblivion_path = if self.oblivion_path.is_empty() { None } else { Some(PathBuf::from(&self.oblivion_path)) };
+        let fo3_path = if self.fo3_path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(&self.fo3_path))
+        };
+        let fnv_path = if self.fnv_path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(&self.fnv_path))
+        };
+        let oblivion_path = if self.oblivion_path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(&self.oblivion_path))
+        };
         let mpi_path = PathBuf::from(&self.mpi_path);
         let output_path = PathBuf::from(&self.output_path);
         let log_messages = Arc::clone(&self.log_messages);
@@ -436,9 +461,7 @@ fn run_installation(
 
     // Create log file
     let log_path = get_log_path("Installation");
-    let log_file = Arc::new(Mutex::new(
-        fs::File::create(&log_path).ok()
-    ));
+    let log_file = Arc::new(Mutex::new(fs::File::create(&log_path).ok()));
 
     // Helper to log messages to both UI and file
     let log_messages_clone = Arc::clone(&log_messages);
@@ -476,17 +499,19 @@ fn run_installation(
     progress.store(500, Ordering::Relaxed); // 5%
 
     // Phase 2: Load manifest (5-10%)
-    let manifest_path = find_manifest(&mpi_dir)
-        .map_err(|e| format!("Failed to find manifest: {}", e))?;
+    let manifest_path =
+        find_manifest(&mpi_dir).map_err(|e| format!("Failed to find manifest: {}", e))?;
     log(&format!("Loading manifest: {}", manifest_path.display()));
 
     let manifest = ManifestLoader::load_from_file(&manifest_path)
         .map_err(|e| format!("Failed to load manifest: {}", e))?;
 
     if let Some(pkg) = &manifest.package {
-        log(&format!("Package: {} v{}",
+        log(&format!(
+            "Package: {} v{}",
             pkg.title.as_deref().unwrap_or("Unknown"),
-            pkg.version.as_deref().unwrap_or("?")));
+            pkg.version.as_deref().unwrap_or("?")
+        ));
     }
 
     let assets = ManifestLoader::parse_assets(&manifest)
@@ -507,22 +532,34 @@ fn run_installation(
 
     // Create config and resolver
     let config = InstallConfig {
-        fallout3_root: fo3_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        falloutnv_root: fnv_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        oblivion_root: oblivion_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        fallout3_root: fo3_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        falloutnv_root: fnv_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        oblivion_root: oblivion_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
         destination_path: output_path.to_string_lossy().to_string(),
         mpi_package_path: mpi_dir.to_string_lossy().to_string(),
     };
 
-    let resolver = LocationResolver::new(locations.clone(), config)
-        .with_variables(&variables);
+    let resolver = LocationResolver::new(locations.clone(), config).with_variables(&variables);
 
     // Run pre-installation checks (hash verification, file existence, etc.)
     let checks = ManifestLoader::get_checks(&manifest);
     if !checks.is_empty() {
-        log(&format!("Running {} pre-installation checks...", checks.len()));
+        log(&format!(
+            "Running {} pre-installation checks...",
+            checks.len()
+        ));
         let verifier = FileVerifier::new(&resolver);
-        let verification_result = verifier.run_checks(&checks)
+        let verification_result = verifier
+            .run_checks(&checks)
             .map_err(|e| format!("Verification error: {}", e))?;
 
         if !verification_result.is_success() {
@@ -549,7 +586,8 @@ fn run_installation(
         output_path.clone(),
         &locations,
         &bsa_targets,
-    ).map_err(|e| format!("Failed to create asset processor: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create asset processor: {}", e))?;
 
     std::fs::create_dir_all(&output_path)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -560,26 +598,35 @@ fn run_installation(
     let log_messages_clone2 = Arc::clone(&log_messages);
     let log_file_clone2 = Arc::clone(&log_file);
 
-    let stats = processor.process_assets_streaming_with_callback(&assets, move |current, total, msg| {
-        // Update progress: 10% + (current/total * 70%)
-        let pct = 1000 + ((current as u32 * 7000) / total as u32);
-        progress_clone.store(pct, Ordering::Relaxed);
+    let stats = processor
+        .process_assets_streaming_with_callback(&assets, move |current, total, msg| {
+            // Update progress: 10% + (current/total * 70%)
+            let pct = 1000 + ((current as u32 * 7000) / total as u32);
+            progress_clone.store(pct, Ordering::Relaxed);
 
-        // Log progress periodically
-        if current % 1000 == 0 || current == total {
-            if let Ok(mut logs) = log_messages_clone2.lock() {
-                logs.push(format!("Assets: {}/{} - {}", current, total, msg));
-            }
-            if let Ok(mut file_guard) = log_file_clone2.lock() {
-                if let Some(ref mut file) = *file_guard {
-                    let timestamp = Local::now().format("%H:%M:%S");
-                    let _ = writeln!(file, "[{}] Assets: {}/{} - {}", timestamp, current, total, msg);
+            // Log progress periodically
+            if current % 1000 == 0 || current == total {
+                if let Ok(mut logs) = log_messages_clone2.lock() {
+                    logs.push(format!("Assets: {}/{} - {}", current, total, msg));
+                }
+                if let Ok(mut file_guard) = log_file_clone2.lock() {
+                    if let Some(ref mut file) = *file_guard {
+                        let timestamp = Local::now().format("%H:%M:%S");
+                        let _ = writeln!(
+                            file,
+                            "[{}] Assets: {}/{} - {}",
+                            timestamp, current, total, msg
+                        );
+                    }
                 }
             }
-        }
-    }).map_err(|e| format!("Failed to process assets: {}", e))?;
+        })
+        .map_err(|e| format!("Failed to process assets: {}", e))?;
 
-    log(&format!("Processed: {} success, {} failed", stats.success, stats.failed));
+    log(&format!(
+        "Processed: {} success, {} failed",
+        stats.success, stats.failed
+    ));
 
     // Show first few errors to help debugging
     if !stats.errors.is_empty() {
@@ -588,7 +635,10 @@ fn run_installation(
             log(&format!("  Error: {}", err));
         }
         if stats.errors.len() > show_count {
-            log(&format!("  ... and {} more errors", stats.errors.len() - show_count));
+            log(&format!(
+                "  ... and {} more errors",
+                stats.errors.len() - show_count
+            ));
         }
     }
     progress.store(8000, Ordering::Relaxed); // 80%
@@ -599,35 +649,79 @@ fn run_installation(
     let log_messages_clone3 = Arc::clone(&log_messages);
     let log_file_clone3 = Arc::clone(&log_file);
 
-    let (bsa_success, bsa_fail) = processor.finalize_bsas_with_callback(move |current, total, bsa_name| {
-        // Update progress: 80% + (current/total * 15%)
-        let pct = 8000 + ((current as u32 * 1500) / total as u32);
-        progress_clone.store(pct, Ordering::Relaxed);
+    let (bsa_success, bsa_fail) = processor
+        .finalize_bsas_with_callback(move |current, total, bsa_name| {
+            // Update progress: 80% + (current/total * 15%)
+            let pct = 8000 + ((current as u32 * 1500) / total as u32);
+            progress_clone.store(pct, Ordering::Relaxed);
 
-        // Log each BSA
-        if let Ok(mut logs) = log_messages_clone3.lock() {
-            logs.push(format!("Writing BSA {}/{}: {}", current, total, bsa_name));
-        }
-        if let Ok(mut file_guard) = log_file_clone3.lock() {
-            if let Some(ref mut file) = *file_guard {
-                let timestamp = Local::now().format("%H:%M:%S");
-                let _ = writeln!(file, "[{}] Writing BSA {}/{}: {}", timestamp, current, total, bsa_name);
+            // Log each BSA
+            if let Ok(mut logs) = log_messages_clone3.lock() {
+                logs.push(format!("Writing BSA {}/{}: {}", current, total, bsa_name));
             }
-        }
-    }).map_err(|e| format!("Failed to write BSAs: {}", e))?;
+            if let Ok(mut file_guard) = log_file_clone3.lock() {
+                if let Some(ref mut file) = *file_guard {
+                    let timestamp = Local::now().format("%H:%M:%S");
+                    let _ = writeln!(
+                        file,
+                        "[{}] Writing BSA {}/{}: {}",
+                        timestamp, current, total, bsa_name
+                    );
+                }
+            }
+        })
+        .map_err(|e| format!("Failed to write BSAs: {}", e))?;
 
-    log(&format!("BSA archives: {} created, {} failed", bsa_success, bsa_fail));
+    log(&format!(
+        "BSA archives: {} created, {} failed",
+        bsa_success, bsa_fail
+    ));
     progress.store(9000, Ordering::Relaxed); // 90%
 
     // Phase 5: Post-installation commands (90-95%)
+    let mut post_fail = 0usize;
     let post_commands = ManifestLoader::get_post_commands(&manifest);
     if !post_commands.is_empty() {
         log("Executing post-installation commands...");
-        let (post_success, post_fail) = ManifestLoader::execute_post_commands(&post_commands, &output_path.to_string_lossy())
-            .map_err(|e| format!("Failed to execute post-commands: {}", e))?;
-        log(&format!("Post-commands: {} success, {} failed", post_success, post_fail));
+        let (post_success, post_fail_count) =
+            ManifestLoader::execute_post_commands(&post_commands, &output_path.to_string_lossy())
+                .map_err(|e| format!("Failed to execute post-commands: {}", e))?;
+        post_fail = post_fail_count;
+        log(&format!(
+            "Post-commands: {} success, {} failed",
+            post_success, post_fail
+        ));
     }
     progress.store(9500, Ordering::Relaxed); // 95%
+
+    let missing_patch_errors = stats
+        .errors
+        .iter()
+        .filter(|e| e.contains("Patch file not found"))
+        .count();
+
+    let mut failure_reasons: Vec<String> = Vec::new();
+    if stats.failed > 0 {
+        failure_reasons.push(format!("{} asset operations failed", stats.failed));
+    }
+    if bsa_fail > 0 {
+        failure_reasons.push(format!("{} BSA archives failed to write", bsa_fail));
+    }
+    if post_fail > 0 {
+        failure_reasons.push(format!("{} post-install commands failed", post_fail));
+    }
+
+    let failure_message = if failure_reasons.is_empty() {
+        None
+    } else if missing_patch_errors > 0 {
+        Some(format!(
+            "{}. Detected {} missing patch files (.xd3). This usually means the extracted MPI package is incomplete or mismatched for this manifest.",
+            failure_reasons.join("; "),
+            missing_patch_errors
+        ))
+    } else {
+        Some(failure_reasons.join("; "))
+    };
 
     // Phase 6: Cleanup (95-100%)
     if cleanup_needed {
@@ -635,12 +729,19 @@ fn run_installation(
         let _ = MpiExtractor::cleanup_temp(&mpi_dir);
     }
 
+    if let Some(message) = failure_message {
+        return Err(format!("Installation failed: {}", message));
+    }
+
     progress.store(10000, Ordering::Relaxed); // 100%
 
     let elapsed = install_start.elapsed();
     let minutes = elapsed.as_secs() / 60;
     let seconds = elapsed.as_secs() % 60;
-    log(&format!("Installation complete! Total time: {}m {}s", minutes, seconds));
+    log(&format!(
+        "Installation complete! Total time: {}m {}s",
+        minutes, seconds
+    ));
 
     Ok(())
 }
@@ -663,10 +764,18 @@ fn find_manifest(mpi_dir: &PathBuf) -> Result<PathBuf, String> {
     }
 
     // Search recursively
-    for entry in walkdir::WalkDir::new(mpi_dir).max_depth(3).into_iter().flatten() {
+    for entry in walkdir::WalkDir::new(mpi_dir)
+        .max_depth(3)
+        .into_iter()
+        .flatten()
+    {
         let name = entry.file_name().to_string_lossy().to_lowercase();
         if (name.contains("manifest") || name == "index.json")
-            && entry.path().extension().map(|e| e == "json").unwrap_or(false)
+            && entry
+                .path()
+                .extension()
+                .map(|e| e == "json")
+                .unwrap_or(false)
         {
             return Ok(entry.path().to_path_buf());
         }
