@@ -10,7 +10,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 use hound::{WavWriter, WavSpec, SampleFormat};
-use vorbis_rs::VorbisEncoderBuilder;
+use vorbis_rs::{VorbisEncoderBuilder, VorbisBitrateManagementStrategy};
 use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm, DualPcm};
 
 /// Audio processing service for decoding, resampling, and encoding audio files
@@ -36,6 +36,26 @@ impl AudioProcessor {
 
     pub fn with_ogg_quality(mut self, quality: f32) -> Self {
         self.ogg_quality = quality.clamp(-0.1, 1.0);
+        self
+    }
+
+    /// Configure from MPI manifest params string (e.g. "-f:24000 -q:5")
+    /// -f:<hz> sets target sample rate, -q:<0-10> sets OGG quality (mapped to -0.1..1.0)
+    pub fn with_params(mut self, params: &str) -> Self {
+        for token in params.split_whitespace() {
+            if let Some(freq_str) = token.strip_prefix("-f:") {
+                if let Ok(freq) = freq_str.parse::<u32>() {
+                    if freq > 0 {
+                        self.target_sample_rate = freq;
+                    }
+                }
+            } else if let Some(q_str) = token.strip_prefix("-q:") {
+                if let Ok(q) = q_str.parse::<f32>() {
+                    // OggEnc2 quality scale: 0-10 maps to vorbis -0.1 to 1.0
+                    self.ogg_quality = (q / 10.0).clamp(-0.1, 1.0);
+                }
+            }
+        }
         self
     }
 
@@ -161,26 +181,77 @@ impl AudioProcessor {
         })
     }
 
+    /// Append samples from a Symphonia audio buffer in interleaved format.
+    /// Symphonia returns planar data (one plane per channel), so we must
+    /// interleave them: [L1, R1, L2, R2, ...] not [L1..Ln, R1..Rn].
     fn append_samples(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
         match buffer {
             AudioBufferRef::F32(buf) => {
-                for plane in buf.planes().planes() {
-                    output.extend_from_slice(plane);
+                let signal = buf.planes();
+                let planes = signal.planes();
+                if planes.len() <= 1 {
+                    for plane in planes {
+                        output.extend_from_slice(plane);
+                    }
+                } else {
+                    let num_frames = planes[0].len();
+                    output.reserve(num_frames * planes.len());
+                    for i in 0..num_frames {
+                        for plane in planes {
+                            output.push(plane[i]);
+                        }
+                    }
                 }
             }
             AudioBufferRef::S16(buf) => {
-                for plane in buf.planes().planes() {
-                    output.extend(plane.iter().map(|&s| s as f32 / 32768.0));
+                let signal = buf.planes();
+                let planes = signal.planes();
+                if planes.len() <= 1 {
+                    for plane in planes {
+                        output.extend(plane.iter().map(|&s| s as f32 / 32768.0));
+                    }
+                } else {
+                    let num_frames = planes[0].len();
+                    output.reserve(num_frames * planes.len());
+                    for i in 0..num_frames {
+                        for plane in planes {
+                            output.push(plane[i] as f32 / 32768.0);
+                        }
+                    }
                 }
             }
             AudioBufferRef::S32(buf) => {
-                for plane in buf.planes().planes() {
-                    output.extend(plane.iter().map(|&s| s as f32 / 2147483648.0));
+                let signal = buf.planes();
+                let planes = signal.planes();
+                if planes.len() <= 1 {
+                    for plane in planes {
+                        output.extend(plane.iter().map(|&s| s as f32 / 2147483648.0));
+                    }
+                } else {
+                    let num_frames = planes[0].len();
+                    output.reserve(num_frames * planes.len());
+                    for i in 0..num_frames {
+                        for plane in planes {
+                            output.push(plane[i] as f32 / 2147483648.0);
+                        }
+                    }
                 }
             }
             AudioBufferRef::U8(buf) => {
-                for plane in buf.planes().planes() {
-                    output.extend(plane.iter().map(|&s| (s as f32 - 128.0) / 128.0));
+                let signal = buf.planes();
+                let planes = signal.planes();
+                if planes.len() <= 1 {
+                    for plane in planes {
+                        output.extend(plane.iter().map(|&s| (s as f32 - 128.0) / 128.0));
+                    }
+                } else {
+                    let num_frames = planes[0].len();
+                    output.reserve(num_frames * planes.len());
+                    for i in 0..num_frames {
+                        for plane in planes {
+                            output.push((plane[i] as f32 - 128.0) / 128.0);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -263,8 +334,13 @@ impl AudioProcessor {
             channels,
             &mut output,
         )
-        .map_err(|e| anyhow::anyhow!("Failed to create Vorbis encoder: {:?}", e))?
-        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to create Vorbis encoder: {:?}", e))?;
+
+        encoder.bitrate_management_strategy(VorbisBitrateManagementStrategy::QualityVbr {
+            target_quality: self.ogg_quality,
+        });
+
+        let mut encoder = encoder.build()
         .map_err(|e| anyhow::anyhow!("Failed to build Vorbis encoder: {:?}", e))?;
 
         // Convert to slices for the encoder

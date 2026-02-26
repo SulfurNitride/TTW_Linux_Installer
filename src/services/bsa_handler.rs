@@ -59,8 +59,9 @@ impl BsaHandler {
         *self.accessed_bsas.entry(bsa_key).or_insert(0) += 1;
 
         // Open archive fresh each time (avoids lifetime issues with caching)
-        let (archive, _) = Archive::read(bsa_path)
+        let (archive, options) = Archive::read(bsa_path)
             .with_context(|| format!("Failed to open BSA: {}", bsa_path.display()))?;
+        let compression_options: ba2::tes4::FileCompressionOptions = (&options).into();
 
         // Normalize path separators (BSA uses backslashes)
         let normalized_path = file_path.replace('/', "\\");
@@ -81,11 +82,10 @@ impl BsaHandler {
                     let current_file = String::from_utf8_lossy(file_key.name().as_bytes());
 
                     if current_file.eq_ignore_ascii_case(file_name) {
-                        // Extract file data
-                        let data = if file.is_compressed() {
-                            file.decompress(&Default::default())?.as_bytes().to_vec()
-                        } else {
+                        let data = if file.is_decompressed() {
                             file.as_bytes().to_vec()
+                        } else {
+                            file.decompress(&compression_options)?.as_bytes().to_vec()
                         };
                         return Ok(data);
                     }
@@ -209,9 +209,10 @@ impl BsaExtractCache {
         bsa_path: &Path,
         file_paths: &[&str],
     ) -> Result<usize> {
-        // Open BSA once
-        let (archive, _) = Archive::read(bsa_path)
+        // Open BSA once with proper options for decompression
+        let (archive, options) = Archive::read(bsa_path)
             .with_context(|| format!("Failed to open BSA: {}", bsa_path.display()))?;
+        let compression_options: ba2::tes4::FileCompressionOptions = (&options).into();
 
         // Build a set of normalized paths we need
         let mut needed: HashSet<String> = file_paths.iter()
@@ -238,11 +239,10 @@ impl BsaExtractCache {
                 };
 
                 if needed.remove(&full_path) {
-                    // Extract file data
-                    let data = if file.is_compressed() {
-                        file.decompress(&Default::default())?.as_bytes().to_vec()
-                    } else {
+                    let data = if file.is_decompressed() {
                         file.as_bytes().to_vec()
+                    } else {
+                        file.decompress(&compression_options)?.as_bytes().to_vec()
                     };
 
                     let data_size = data.len();
@@ -426,34 +426,78 @@ impl BsaBuilder {
         self.file_count() == 0
     }
 
-    /// Build and write the BSA archive to disk
+    /// Build and write the BSA archive to disk with parallel compression
     pub fn build(self, output_path: &Path) -> Result<()> {
+        use ba2::tes4::FileCompressionOptions;
+
         if self.is_empty() {
             bail!("Cannot create empty BSA archive");
         }
 
-        // Build the archive structure
-        let archive: Archive = self.files.iter().map(|(dir_path, files)| {
-            let directory: Directory = files.iter().map(|(file_name, data)| {
-                let file = BsaFile::from_decompressed(&data[..]);
-                (DirectoryKey::from(file_name.as_bytes()), file)
-            }).collect();
-            (ArchiveKey::from(dir_path.as_bytes()), directory)
-        }).collect();
+        let should_compress = self.archive_flags.contains(ArchiveFlags::COMPRESSED);
 
-        // Set up write options
+        // Flatten to entries for parallel processing
+        struct Entry {
+            dir_path: String,
+            file_name: String,
+            data: Vec<u8>,
+        }
+
+        let entries: Vec<Entry> = self.files
+            .into_iter()
+            .flat_map(|(dir_path, files)| {
+                files.into_iter().map(move |(file_name, data)| Entry {
+                    dir_path: dir_path.clone(),
+                    file_name,
+                    data,
+                })
+            })
+            .collect();
+
+        // Parallel compress
+        let version = self.version;
+        let processed: Result<Vec<(String, String, BsaFile<'static>)>> = entries
+            .par_iter()
+            .map(|entry| {
+                let uncompressed = BsaFile::from_decompressed(entry.data.clone().into_boxed_slice());
+                let file = if should_compress {
+                    let opts = FileCompressionOptions::builder().version(version).build();
+                    uncompressed.compress(&opts)
+                        .with_context(|| format!("Failed to compress: {}/{}", entry.dir_path, entry.file_name))?
+                } else {
+                    uncompressed
+                };
+                Ok((entry.dir_path.clone(), entry.file_name.clone(), file))
+            })
+            .collect();
+
+        let processed = processed?;
+
+        // Assemble archive
+        let mut archive = Archive::new();
+        for (dir_path, file_name, file) in processed {
+            let archive_key = ArchiveKey::from(dir_path.as_bytes());
+            let directory_key = DirectoryKey::from(file_name.as_bytes());
+            match archive.get_mut(&archive_key) {
+                Some(directory) => { directory.insert(directory_key, file); }
+                None => {
+                    let mut directory = Directory::default();
+                    directory.insert(directory_key, file);
+                    archive.insert(archive_key, directory);
+                }
+            }
+        }
+
         let options = ArchiveOptions::builder()
             .version(self.version)
             .flags(self.archive_flags)
             .types(self.archive_types)
             .build();
 
-        // Create parent directory if needed
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Write the archive
         let file = fs::File::create(output_path)
             .with_context(|| format!("Failed to create BSA file: {}", output_path.display()))?;
         let mut writer = BufWriter::new(file);
@@ -596,11 +640,17 @@ impl StreamingBsaBuilder {
     }
 
     /// Build and write the BSA archive to disk
-    /// Loads ONE BSA's worth of data from staging (not all BSAs combined)
+    /// Phase 1: Read files from staging
+    /// Phase 2: Compress files in PARALLEL across all cores
+    /// Phase 3: Assemble archive from pre-compressed files and write
     pub fn build(self, output_path: &Path) -> Result<()> {
+        use ba2::tes4::FileCompressionOptions;
+
         if self.is_empty() {
             bail!("Cannot create empty BSA archive");
         }
+
+        let should_compress = self.archive_flags.contains(ArchiveFlags::COMPRESSED);
 
         // Flush and close the staging writer
         {
@@ -621,35 +671,70 @@ impl StreamingBsaBuilder {
             .with_context(|| "Failed to open staging file for reading")?;
         let mut staging_reader = BufReader::with_capacity(1024 * 1024, staging_file);
 
-        // Load all file data from staging into an owned structure
-        // This loads ONE BSA's worth of data, not all BSAs combined
-        let mut owned_files: HashMap<String, HashMap<String, Vec<u8>>> = HashMap::new();
+        // Phase 1: Read all files from staging into flat vec for parallel processing
+        struct FileEntry {
+            dir_path: String,
+            file_name: String,
+            data: Vec<u8>,
+        }
 
+        let mut file_entries: Vec<FileEntry> = Vec::new();
         for (dir_path, files) in entries {
-            let mut dir_files = HashMap::new();
             for (file_name, entry) in files {
                 let mut data = vec![0u8; entry.size];
                 staging_reader.seek(SeekFrom::Start(entry.offset))?;
                 staging_reader.read_exact(&mut data)?;
-                dir_files.insert(file_name, data);
+                file_entries.push(FileEntry { dir_path: dir_path.clone(), file_name, data });
             }
-            owned_files.insert(dir_path, dir_files);
         }
 
         // Close staging reader and clean up staging file
         drop(staging_reader);
         let _ = fs::remove_file(&self.staging_path);
 
-        // Build the archive from owned data (same as original BsaBuilder)
-        let archive: Archive = owned_files.iter().map(|(dir_path, files)| {
-            let directory: Directory = files.iter().map(|(file_name, data)| {
-                let file = BsaFile::from_decompressed(&data[..]);
-                (DirectoryKey::from(file_name.as_bytes()), file)
-            }).collect();
-            (ArchiveKey::from(dir_path.as_bytes()), directory)
-        }).collect();
+        // Phase 2: Compress files in PARALLEL (the expensive part)
+        let version = self.version;
+        let processed: Result<Vec<(String, String, BsaFile<'static>)>> = file_entries
+            .par_iter()
+            .map(|entry| {
+                let uncompressed = BsaFile::from_decompressed(entry.data.clone().into_boxed_slice());
 
-        // owned_files is dropped here, freeing memory before write
+                let file = if should_compress {
+                    let compression_options = FileCompressionOptions::builder()
+                        .version(version)
+                        .build();
+                    uncompressed.compress(&compression_options)
+                        .with_context(|| format!("Failed to compress: {}/{}", entry.dir_path, entry.file_name))?
+                } else {
+                    uncompressed
+                };
+
+                Ok((entry.dir_path.clone(), entry.file_name.clone(), file))
+            })
+            .collect();
+
+        let processed = processed?;
+
+        // Drop the original uncompressed data
+        drop(file_entries);
+
+        // Phase 3: Assemble archive from pre-compressed files
+        let mut archive = Archive::new();
+        for (dir_path, file_name, file) in processed {
+            let archive_key = ArchiveKey::from(dir_path.as_bytes());
+            let directory_key = DirectoryKey::from(file_name.as_bytes());
+
+            match archive.get_mut(&archive_key) {
+                Some(directory) => {
+                    directory.insert(directory_key, file);
+                }
+                None => {
+                    let mut directory = Directory::default();
+                    directory.insert(directory_key, file);
+                    archive.insert(archive_key, directory);
+                }
+            }
+        }
 
         // Set up write options
         let options = ArchiveOptions::builder()
@@ -663,7 +748,7 @@ impl StreamingBsaBuilder {
             fs::create_dir_all(parent)?;
         }
 
-        // Write the archive
+        // Write the archive (all files already compressed, just writes bytes)
         let file = File::create(output_path)
             .with_context(|| format!("Failed to create BSA file: {}", output_path.display()))?;
         let mut writer = BufWriter::new(file);

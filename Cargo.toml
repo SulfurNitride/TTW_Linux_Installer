@@ -41,7 +41,7 @@ clap = { version = "4.0", features = ["derive"] }
 
 # Parallel processing
 rayon = "1.10"
-crossbeam-channel = "0.5"  # For bounded producer-consumer pattern
+crossbeam-channel = "0.5"
 
 # System info (for memory detection)
 sysinfo = "0.35"
