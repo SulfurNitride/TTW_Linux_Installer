@@ -693,11 +693,12 @@ impl StreamingBsaBuilder {
         let _ = fs::remove_file(&self.staging_path);
 
         // Phase 2: Compress files in PARALLEL (the expensive part)
+        // Consume file_entries to avoid cloning data
         let version = self.version;
         let processed: Result<Vec<(String, String, BsaFile<'static>)>> = file_entries
-            .par_iter()
+            .into_par_iter()
             .map(|entry| {
-                let uncompressed = BsaFile::from_decompressed(entry.data.clone().into_boxed_slice());
+                let uncompressed = BsaFile::from_decompressed(entry.data.into_boxed_slice());
 
                 let file = if should_compress {
                     let compression_options = FileCompressionOptions::builder()
@@ -709,14 +710,11 @@ impl StreamingBsaBuilder {
                     uncompressed
                 };
 
-                Ok((entry.dir_path.clone(), entry.file_name.clone(), file))
+                Ok((entry.dir_path, entry.file_name, file))
             })
             .collect();
 
         let processed = processed?;
-
-        // Drop the original uncompressed data
-        drop(file_entries);
 
         // Phase 3: Assemble archive from pre-compressed files
         let mut archive = Archive::new();
@@ -914,8 +912,9 @@ impl BsaWriterManager {
         self.builders.get(&location_index).map(|(_, b)| b.file_count())
     }
 
-    /// Write all BSA archives to the destination directory (parallel)
-    /// Uses Rayon to build multiple BSAs concurrently for better CPU utilization
+    /// Write all BSA archives to the destination directory (one at a time, full CPU)
+    /// Each BSA's compression uses all cores via par_iter internally.
+    /// Building one at a time keeps RAM to ~1 BSA's worth instead of all 26.
     pub fn write_all(&mut self, dest_dir: &Path) -> Result<(usize, usize)> {
         // Collect all non-empty builders
         let non_empty_keys: Vec<_> = self.builders.iter()
@@ -928,8 +927,8 @@ impl BsaWriterManager {
             return Ok((0, 0));
         }
 
-        // Extract builders from HashMap for parallel processing
-        let builders_to_process: Vec<_> = non_empty_keys.iter()
+        // Extract builders, sorted largest first for better progress visibility
+        let mut builders_to_process: Vec<_> = non_empty_keys.iter()
             .filter_map(|idx| {
                 self.builders.remove(idx).map(|(name, builder)| {
                     let file_count = builder.file_count();
@@ -937,49 +936,43 @@ impl BsaWriterManager {
                 })
             })
             .collect();
+        builders_to_process.sort_by(|a, b| b.3.cmp(&a.3));
 
         let total = builders_to_process.len();
-        println!("\n=== Writing {} BSA Archives (parallel) ===\n", total);
+        println!("\n=== Writing {} BSA Archives (sequential, full CPU per BSA) ===\n", total);
 
-        let success_count = AtomicUsize::new(0);
-        let fail_count = AtomicUsize::new(0);
-        let completed = AtomicUsize::new(0);
-        let dest_dir = dest_dir.to_path_buf();
+        let mut success = 0usize;
+        let mut fail = 0usize;
 
-        // Process BSAs in parallel
-        builders_to_process.into_par_iter().for_each(|(_, bsa_name, builder, file_count)| {
+        for (idx, (_, bsa_name, builder, file_count)) in builders_to_process.into_iter().enumerate() {
             let output_path = dest_dir.join(&bsa_name);
-            let idx = completed.fetch_add(1, Ordering::SeqCst) + 1;
 
-            println!("  [{}/{}] {} ({} files) ... building", idx, total, bsa_name, file_count);
+            println!("  [{}/{}] {} ({} files) ... building", idx + 1, total, bsa_name, file_count);
 
             match builder.build(&output_path) {
                 Ok(_) => {
-                    println!("  [{}/{}] {} ... OK", idx, total, bsa_name);
-                    success_count.fetch_add(1, Ordering::SeqCst);
+                    let size_mb = fs::metadata(&output_path).map(|m| m.len() / 1024 / 1024).unwrap_or(0);
+                    println!("  [{}/{}] {} ... OK ({} MB)", idx + 1, total, bsa_name, size_mb);
+                    success += 1;
                 }
                 Err(e) => {
-                    println!("  [{}/{}] {} ... FAILED: {}", idx, total, bsa_name, e);
-                    fail_count.fetch_add(1, Ordering::SeqCst);
+                    println!("  [{}/{}] {} ... FAILED: {}", idx + 1, total, bsa_name, e);
+                    fail += 1;
                 }
             }
-        });
-
-        let success = success_count.load(Ordering::SeqCst);
-        let fail = fail_count.load(Ordering::SeqCst);
+        }
 
         println!("\nBSA Creation: {}/{} succeeded, {} failed", success, total, fail);
 
         Ok((success, fail))
     }
 
-    /// Write all BSA archives with progress callback for GUI (parallel)
+    /// Write all BSA archives with progress callback for GUI (sequential, full CPU per BSA)
     /// callback(current, total, bsa_name)
     pub fn write_all_with_callback<F>(&mut self, dest_dir: &Path, callback: F) -> Result<(usize, usize)>
     where
         F: Fn(usize, usize, &str) + Sync,
     {
-        // Collect all non-empty builders
         let non_empty_keys: Vec<_> = self.builders.iter()
             .filter(|(_, (_, b))| !b.is_empty())
             .map(|(idx, _)| *idx)
@@ -989,39 +982,30 @@ impl BsaWriterManager {
             return Ok((0, 0));
         }
 
-        // Extract builders from HashMap for parallel processing
-        let builders_to_process: Vec<_> = non_empty_keys.iter()
+        let mut builders_to_process: Vec<_> = non_empty_keys.iter()
             .filter_map(|idx| {
                 self.builders.remove(idx).map(|(name, builder)| {
                     (*idx, name, builder)
                 })
             })
             .collect();
+        builders_to_process.sort_by(|a, b| b.2.file_count().cmp(&a.2.file_count()));
 
         let total = builders_to_process.len();
-        let success_count = AtomicUsize::new(0);
-        let fail_count = AtomicUsize::new(0);
-        let completed = AtomicUsize::new(0);
-        let dest_dir = dest_dir.to_path_buf();
+        let mut success = 0usize;
+        let mut fail = 0usize;
 
-        // Process BSAs in parallel
-        builders_to_process.into_par_iter().for_each(|(_, bsa_name, builder)| {
-            let idx = completed.fetch_add(1, Ordering::SeqCst) + 1;
-            callback(idx, total, &bsa_name);
-
+        for (idx, (_, bsa_name, builder)) in builders_to_process.into_iter().enumerate() {
+            callback(idx + 1, total, &bsa_name);
             let output_path = dest_dir.join(&bsa_name);
 
             match builder.build(&output_path) {
-                Ok(_) => {
-                    success_count.fetch_add(1, Ordering::SeqCst);
-                }
-                Err(_) => {
-                    fail_count.fetch_add(1, Ordering::SeqCst);
-                }
+                Ok(_) => { success += 1; }
+                Err(_) => { fail += 1; }
             }
-        });
+        }
 
-        Ok((success_count.load(Ordering::SeqCst), fail_count.load(Ordering::SeqCst)))
+        Ok((success, fail))
     }
 }
 

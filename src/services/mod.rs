@@ -8,6 +8,7 @@ mod xdelta_manager;
 mod logger;
 mod file_verifier;
 mod bsa_cache;
+mod memory_monitor;
 
 pub use mpi_extractor::*;
 pub use manifest_loader::*;
@@ -19,3 +20,4 @@ pub use xdelta_manager::*;
 pub use logger::*;
 pub use file_verifier::*;
 pub use bsa_cache::*;
+pub use memory_monitor::*;

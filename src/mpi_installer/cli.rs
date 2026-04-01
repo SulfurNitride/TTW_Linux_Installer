@@ -319,6 +319,7 @@ fn run_install(
         "Processing complete: {} success, {} failed",
         stats.success, stats.failed
     );
+    stats.print_summary();
     if !stats.errors.is_empty() {
         println!("\n=== Errors ({}) ===", stats.errors.len());
         for err in &stats.errors {

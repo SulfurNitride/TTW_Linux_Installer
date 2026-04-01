@@ -259,6 +259,7 @@ impl AudioProcessor {
     }
 
     /// Resample audio to target sample rate
+    /// Uses settings matching oggenc2's SRC_SINC_FASTEST (libsamplerate)
     pub fn resample(&self, audio: DecodedAudio) -> Result<DecodedAudio> {
         if audio.sample_rate == self.target_sample_rate {
             return Ok(audio);
@@ -275,25 +276,7 @@ impl AudioProcessor {
             channel_data[i % channels].push(*sample);
         }
 
-        // Create resampler
-        let params = SincInterpolationParameters {
-            sinc_len: 256,
-            f_cutoff: 0.95,
-            interpolation: SincInterpolationType::Linear,
-            oversampling_factor: 256,
-            window: WindowFunction::BlackmanHarris2,
-        };
-
-        let mut resampler = SincFixedIn::<f32>::new(
-            ratio,
-            2.0,
-            params,
-            samples_per_channel,
-            channels,
-        ).context("Failed to create resampler")?;
-
-        let resampled = resampler.process(&channel_data, None)
-            .context("Failed to resample audio")?;
+        let resampled = Self::resample_channels(channel_data, samples_per_channel, channels, ratio)?;
 
         // Interleave samples back together
         let output_len = resampled[0].len();
@@ -311,11 +294,41 @@ impl AudioProcessor {
         })
     }
 
+    /// Resample per-channel data without interleaving the output.
+    /// Returns Vec<Vec<f32>> (one vec per channel) - avoids redundant
+    /// interleave+deinterleave when the next step (OGG encode) also wants per-channel data.
+    ///
+    /// Resampler params match oggenc2's default: libsamplerate SRC_SINC_FASTEST
+    fn resample_channels(
+        channel_data: Vec<Vec<f32>>,
+        samples_per_channel: usize,
+        channels: usize,
+        ratio: f64,
+    ) -> Result<Vec<Vec<f32>>> {
+        // Match oggenc2's SRC_SINC_FASTEST quality
+        let params = SincInterpolationParameters {
+            sinc_len: 64,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 64,
+            window: WindowFunction::BlackmanHarris2,
+        };
+
+        let mut resampler = SincFixedIn::<f32>::new(
+            ratio,
+            2.0,
+            params,
+            samples_per_channel,
+            channels,
+        ).context("Failed to create resampler")?;
+
+        resampler.process(&channel_data, None)
+            .context("Failed to resample audio")
+    }
+
     /// Encode audio to OGG Vorbis format
     pub fn encode_ogg(&self, audio: &DecodedAudio) -> Result<Vec<u8>> {
-        let mut output = Vec::new();
-
-        // Group f32 samples by channel (vorbis_rs expects f32)
+        // Deinterleave into per-channel data for the encoder
         let samples_per_channel = audio.samples.len() / audio.channels;
         let mut channel_samples: Vec<Vec<f32>> = vec![Vec::with_capacity(samples_per_channel); audio.channels];
 
@@ -323,32 +336,36 @@ impl AudioProcessor {
             channel_samples[i % audio.channels].push(sample.clamp(-1.0, 1.0));
         }
 
-        // Create encoder with NonZero types
-        let sample_rate = NonZero::new(audio.sample_rate)
+        Self::encode_ogg_channels(&channel_samples, audio.sample_rate, self.ogg_quality)
+    }
+
+    /// Encode per-channel data directly to OGG without interleaving first.
+    /// Used by the optimized pipeline to skip the interleave→deinterleave roundtrip.
+    fn encode_ogg_channels(channel_data: &[Vec<f32>], sample_rate: u32, quality: f32) -> Result<Vec<u8>> {
+        let channels = channel_data.len();
+        let mut output = Vec::new();
+
+        let sr = NonZero::new(sample_rate)
             .ok_or_else(|| anyhow::anyhow!("Sample rate cannot be zero"))?;
-        let channels = NonZero::new(audio.channels as u8)
+        let ch = NonZero::new(channels as u8)
             .ok_or_else(|| anyhow::anyhow!("Channel count cannot be zero"))?;
 
-        let mut encoder = VorbisEncoderBuilder::new(
-            sample_rate,
-            channels,
-            &mut output,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create Vorbis encoder: {:?}", e))?;
+        let mut encoder = VorbisEncoderBuilder::new(sr, ch, &mut output)
+            .map_err(|e| anyhow::anyhow!("Failed to create Vorbis encoder: {:?}", e))?;
 
         encoder.bitrate_management_strategy(VorbisBitrateManagementStrategy::QualityVbr {
-            target_quality: self.ogg_quality,
+            target_quality: quality,
         });
 
         let mut encoder = encoder.build()
-        .map_err(|e| anyhow::anyhow!("Failed to build Vorbis encoder: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to build Vorbis encoder: {:?}", e))?;
 
-        // Convert to slices for the encoder
-        let channel_slices: Vec<&[f32]> = channel_samples.iter()
-            .map(|v| v.as_slice())
+        // Clamp samples and build slices
+        let clamped: Vec<Vec<f32>> = channel_data.iter()
+            .map(|ch| ch.iter().map(|s| s.clamp(-1.0, 1.0)).collect())
             .collect();
+        let channel_slices: Vec<&[f32]> = clamped.iter().map(|v| v.as_slice()).collect();
 
-        // Encode
         encoder.encode_audio_block(&channel_slices)
             .map_err(|e| anyhow::anyhow!("Failed to encode audio: {:?}", e))?;
 
@@ -384,14 +401,35 @@ impl AudioProcessor {
     }
 
     /// Process OggEnc2 operation: decode OGG, resample, re-encode to OGG
+    ///
+    /// Optimized pipeline that keeps samples in per-channel format throughout,
+    /// avoiding the interleave→deinterleave roundtrip between resample and encode.
+    /// Matches oggenc2.exe behavior: decode → resample (SRC_SINC_FASTEST) → encode.
     pub fn process_ogg_resample(&self, input_data: &[u8]) -> Result<Vec<u8>> {
         let decoded = self.decode_bytes(input_data, Some("ogg"))
             .context("Failed to decode OGG")?;
 
-        let resampled = self.resample(decoded)
+        let channels = decoded.channels;
+        let samples_per_channel = decoded.samples.len() / channels;
+
+        // Skip resample if already at target rate
+        if decoded.sample_rate == self.target_sample_rate {
+            return self.encode_ogg(&decoded);
+        }
+
+        // Deinterleave once (decode produces interleaved samples)
+        let mut channel_data: Vec<Vec<f32>> = vec![Vec::with_capacity(samples_per_channel); channels];
+        for (i, &sample) in decoded.samples.iter().enumerate() {
+            channel_data[i % channels].push(sample);
+        }
+
+        // Resample - returns per-channel data directly (no interleaving)
+        let ratio = self.target_sample_rate as f64 / decoded.sample_rate as f64;
+        let resampled = Self::resample_channels(channel_data, samples_per_channel, channels, ratio)
             .context("Failed to resample")?;
 
-        self.encode_ogg(&resampled)
+        // Encode directly from per-channel data (no deinterleaving needed)
+        Self::encode_ogg_channels(&resampled, self.target_sample_rate, self.ogg_quality)
             .context("Failed to encode OGG")
     }
 

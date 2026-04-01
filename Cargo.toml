@@ -83,9 +83,16 @@ eframe = "0.33.3"
 egui = "0.33.3"
 rfd = "0.17"  # File dialogs
 
+# FFmpeg bindings (optional, for benchmarking - used in examples only)
+ffmpeg-next = { version = "8.1", optional = true }
+
 # Platform-specific (must be at end to not break other deps)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[features]
+default = []
+ffmpeg = ["ffmpeg-next"]
 
 [[bin]]
 name = "mpi_installer"
