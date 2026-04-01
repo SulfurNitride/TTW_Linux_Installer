@@ -899,6 +899,16 @@ impl BsaWriterManager {
         self.builders.contains_key(&location_index)
     }
 
+    /// Get all registered BSA location indices
+    pub fn bsa_location_indices(&self) -> Vec<i32> {
+        self.builders.keys().copied().collect()
+    }
+
+    /// Get the output name for a BSA location
+    pub fn bsa_name(&self, location_index: i32) -> Option<&str> {
+        self.builders.get(&location_index).map(|(name, _)| name.as_str())
+    }
+
     /// Add a file to a BSA (thread-safe, writes to disk immediately)
     pub fn add_file(&self, location_index: i32, file_path: &str, data: Vec<u8>) -> Result<()> {
         let (_, builder) = self.builders.get(&location_index)
@@ -910,6 +920,33 @@ impl BsaWriterManager {
     /// Get file count for a specific BSA
     pub fn file_count(&self, location_index: i32) -> Option<usize> {
         self.builders.get(&location_index).map(|(_, b)| b.file_count())
+    }
+
+    /// Take a builder out of the manager for independent building.
+    /// Returns (bsa_name, builder) if the location exists and has files.
+    pub fn take_builder(&mut self, location_index: i32) -> Option<(String, StreamingBsaBuilder)> {
+        self.builders.remove(&location_index).filter(|(_, b)| !b.is_empty())
+    }
+
+    /// Build a single BSA by location index. Removes it from the manager.
+    /// Returns (bsa_name, output_size_bytes) on success.
+    pub fn build_single(&mut self, location_index: i32, dest_dir: &Path) -> Result<Option<(String, u64)>> {
+        let (bsa_name, builder) = match self.take_builder(location_index) {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+
+        let output_path = dest_dir.join(&bsa_name);
+        let file_count = builder.file_count();
+
+        info!("Building BSA: {} ({} files)", bsa_name, file_count);
+        builder.build(&output_path)
+            .with_context(|| format!("Failed to build BSA: {}", bsa_name))?;
+
+        let size = fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+        info!("Built BSA: {} ({} MB)", bsa_name, size / 1024 / 1024);
+
+        Ok(Some((bsa_name, size)))
     }
 
     /// Write all BSA archives to the destination directory (one at a time, full CPU)

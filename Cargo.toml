@@ -51,6 +51,9 @@ walkdir = "2.5"
 tempfile = "3.10"
 memmap2 = "0.9"  # Memory-mapped files (uses virtual memory, not RAM)
 
+# VCDIFF/xdelta3 patching (pure Rust, no subprocess needed)
+oxidelta = { version = "0.1", default-features = false, features = ["zlib-secondary"] }
+
 # Hashing
 sha1 = "0.10"
 md-5 = "0.10"
@@ -83,16 +86,9 @@ eframe = "0.33.3"
 egui = "0.33.3"
 rfd = "0.17"  # File dialogs
 
-# FFmpeg bindings (optional, for benchmarking - used in examples only)
-ffmpeg-next = { version = "8.1", optional = true }
-
 # Platform-specific (must be at end to not break other deps)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[features]
-default = []
-ffmpeg = ["ffmpeg-next"]
 
 [[bin]]
 name = "mpi_installer"

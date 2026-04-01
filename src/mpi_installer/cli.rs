@@ -8,7 +8,7 @@ use ttw_installer::{
     models::InstallConfig,
     services::{
         AssetProcessor, FileVerifier, LocationResolver, Logger, ManifestLoader, MpiExtractor,
-        XdeltaManager,
+        MpiStore, XdeltaManager,
     },
 };
 
@@ -183,14 +183,40 @@ fn run_install(
         }
     }
 
-    // Handle MPI extraction if needed
-    let (mpi_dir, cleanup_needed) = if MpiExtractor::is_mpi_file(mpi_path) {
-        println!("Extracting MPI package...");
-        let extract_dir = dest.join(".mpi_package");
-        let extracted = MpiExtractor::extract_to(mpi_path, &extract_dir)?;
-        (extracted, true)
+    // Handle MPI loading - prefer in-memory if enough RAM, fall back to disk extraction
+    let (mpi_dir, cleanup_needed, mpi_store) = if MpiExtractor::is_mpi_file(mpi_path) {
+        // Check if we have enough RAM for in-memory mode (~4 GB for MPI + ~4 GB for processing)
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        let available_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
+        let use_inmemory = available_gb >= 10.0; // Need ~8 GB headroom
+
+        if use_inmemory {
+            // Load MPI entirely into memory (instant lookups, no disk extraction needed)
+            let store = MpiStore::load(mpi_path)?;
+
+            // Write only the manifest to disk (ManifestLoader needs a file path)
+            let extract_dir = dest.join(".mpi_package");
+            std::fs::create_dir_all(&extract_dir)?;
+            let manifest_dir = extract_dir.join("_package");
+            std::fs::create_dir_all(&manifest_dir)?;
+
+            if let Some(manifest_data) = store.get_manifest() {
+                std::fs::write(manifest_dir.join("index.json"), manifest_data)?;
+            } else {
+                bail!("No manifest found in MPI package");
+            }
+
+            (extract_dir.clone(), true, Some(store))
+        } else {
+            // Low RAM: extract to disk (traditional mode)
+            println!("System has {:.1} GB available RAM, using disk extraction (need 10+ GB for in-memory mode)", available_gb);
+            let extract_dir = dest.join(".mpi_package");
+            let extracted = MpiExtractor::extract_to(mpi_path, &extract_dir)?;
+            (extracted, true, None)
+        }
     } else if mpi_path.is_dir() {
-        (mpi_path.to_path_buf(), false)
+        (mpi_path.to_path_buf(), false, None)
     } else {
         bail!("Invalid MPI path: {}", mpi_path.display());
     };
@@ -296,7 +322,7 @@ fn run_install(
     info!("xdelta3: {}", xdelta.path().display());
 
     // Create asset processor
-    let processor = AssetProcessor::new(
+    let mut processor = AssetProcessor::new(
         resolver,
         xdelta,
         mpi_dir.to_path_buf(),
@@ -305,6 +331,11 @@ fn run_install(
         &bsa_targets,
     )?
     .with_dry_run(dry_run);
+
+    // Attach in-memory MPI store if available
+    if let Some(store) = mpi_store {
+        processor = processor.with_mpi_store(store);
+    }
 
     // Create destination directory
     if !dry_run {

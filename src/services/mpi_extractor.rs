@@ -1,12 +1,137 @@
 use anyhow::{Result, Context};
 use ba2::tes4::Archive;
 use ba2::{Reader, ByteSlice};
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::fs;
 use indicatif::{ProgressBar, ProgressStyle};
+use tracing::info;
 
 /// LZ4 frame magic number
 const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
+
+/// In-memory MPI package store.
+/// Holds all extracted files in a HashMap for instant lookups.
+/// Avoids writing 27k+ files to disk and eliminates case-insensitive filesystem crawling.
+pub struct MpiStore {
+    /// Files stored by lowercase normalized path → data
+    files: HashMap<String, Vec<u8>>,
+    /// Total bytes stored
+    total_bytes: usize,
+}
+
+impl MpiStore {
+    /// Load an MPI file entirely into memory.
+    /// Returns the store with all files decompressed and indexed by lowercase path.
+    pub fn load(mpi_path: &Path) -> Result<Self> {
+        if !mpi_path.exists() {
+            anyhow::bail!("MPI file not found: {}", mpi_path.display());
+        }
+
+        println!("\nLoading MPI package into memory: {}",
+            mpi_path.file_name().unwrap_or_default().to_string_lossy());
+
+        let (archive, options) = Archive::read(mpi_path)
+            .context("Failed to open MPI archive")?;
+        let compression_options: ba2::tes4::FileCompressionOptions = (&options).into();
+
+        // Collect all file entries with references
+        struct FileEntry<'a> {
+            path: String,
+            file: &'a ba2::tes4::File<'a>,
+        }
+
+        let mut entries: Vec<FileEntry> = Vec::new();
+        for (dir_key, folder) in archive.iter() {
+            let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes())
+                .replace('\\', "/");
+            for (file_key, file) in folder.iter() {
+                let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_string();
+                let path = if dir_name.is_empty() || dir_name == "." {
+                    file_name
+                } else {
+                    format!("{}/{}", dir_name, file_name)
+                };
+                entries.push(FileEntry { path, file });
+            }
+        }
+
+        let total_files = entries.len();
+        println!("  {} files in archive, decompressing...", total_files);
+
+        let pb = ProgressBar::new(total_files as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"));
+
+        // Decompress all files in parallel, collect into thread-safe map
+        let files: Mutex<HashMap<String, Vec<u8>>> = Mutex::new(HashMap::with_capacity(total_files));
+        let total_bytes = AtomicUsize::new(0);
+
+        entries.par_iter().for_each(|entry| {
+            let data = if entry.file.is_compressed() {
+                let compressed = entry.file.as_bytes();
+                if compressed.len() >= 4 && compressed[0..4] == LZ4_FRAME_MAGIC {
+                    MpiExtractor::decompress_lz4_frame(compressed).ok()
+                } else {
+                    entry.file.decompress(&compression_options)
+                        .map(|d| d.as_bytes().to_vec())
+                        .ok()
+                }
+            } else {
+                Some(entry.file.as_bytes().to_vec())
+            };
+
+            if let Some(data) = data {
+                total_bytes.fetch_add(data.len(), Ordering::Relaxed);
+                let key = entry.path.to_lowercase();
+                files.lock().unwrap().insert(key, data);
+            }
+
+            pb.inc(1);
+        });
+
+        pb.finish_with_message("Loaded into memory");
+
+        let files = files.into_inner().unwrap();
+        let total_bytes = total_bytes.load(Ordering::Relaxed);
+
+        println!("  MPI loaded: {} files, {:.1} MB in memory",
+            files.len(), total_bytes as f64 / 1024.0 / 1024.0);
+
+        Ok(Self { files, total_bytes })
+    }
+
+    /// Get a file by path (case-insensitive, handles both / and \ separators).
+    pub fn get(&self, path: &str) -> Option<&[u8]> {
+        let normalized = path.replace('\\', "/").to_lowercase();
+        self.files.get(&normalized).map(|v| v.as_slice())
+    }
+
+    /// Get the manifest file (tries common locations).
+    pub fn get_manifest(&self) -> Option<&[u8]> {
+        for name in ["_package/index.json", "manifest.json", "index.json"] {
+            if let Some(data) = self.get(name) {
+                return Some(data);
+            }
+        }
+        None
+    }
+
+    /// Total bytes stored in memory.
+    pub fn total_bytes(&self) -> usize {
+        self.total_bytes
+    }
+
+    /// Number of files stored.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
+    }
+}
 
 /// Extracts .mpi files (BSA archives) to a temporary directory
 pub struct MpiExtractor;
@@ -31,7 +156,11 @@ impl MpiExtractor {
         Self::extract_to(mpi_path, &default_output)
     }
 
-    /// Extract .mpi file to a specific directory
+    /// Extract .mpi file to a specific directory (parallel)
+    ///
+    /// Phase 1: Scan archive and collect all file entries (single-threaded, fast)
+    /// Phase 2: Pre-create all directories (single-threaded, eliminates per-file create_dir_all)
+    /// Phase 3: Decompress + write files in parallel across all CPU cores
     pub fn extract_to(mpi_path: &Path, output_dir: &Path) -> Result<PathBuf> {
         if !mpi_path.exists() {
             anyhow::bail!("MPI file not found: {}", mpi_path.display());
@@ -41,29 +170,21 @@ impl MpiExtractor {
         println!("Extracting to: {}", output_dir.display());
         println!("This may take a few minutes...\n");
 
-        // Create output directory for extraction
         fs::create_dir_all(output_dir)?;
         let temp_dir = output_dir.to_path_buf();
 
-        // Open the BSA/MPI archive using ba2
-        let (archive, _) = Archive::read(mpi_path)
+        let (archive, options) = Archive::read(mpi_path)
             .context("Failed to open MPI archive")?;
+        let compression_options: ba2::tes4::FileCompressionOptions = (&options).into();
 
-        // Count total files
-        let total_files: usize = archive.iter()
-            .map(|(_, folder)| folder.iter().count())
-            .sum();
+        // Phase 1: Collect all file entries and their data references
+        struct FileEntry<'a> {
+            relative_path: String,
+            file: &'a ba2::tes4::File<'a>,
+        }
 
-        println!("Archive opened: {} files found", total_files);
-
-        let pb = ProgressBar::new(total_files as u64);
-        pb.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-            .unwrap()
-            .progress_chars("#>-"));
-
-        let mut extracted = 0;
-        let mut failed = 0;
+        let mut entries: Vec<FileEntry> = Vec::new();
+        let mut dirs_needed: HashSet<PathBuf> = HashSet::new();
 
         for (dir_key, folder) in archive.iter() {
             let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes())
@@ -71,35 +192,76 @@ impl MpiExtractor {
 
             for (file_key, file) in folder.iter() {
                 let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_string();
-                let relative_path = if dir_name.is_empty() {
-                    file_name.clone()
+                let relative_path = if dir_name.is_empty() || dir_name == "." {
+                    file_name
                 } else {
                     format!("{}/{}", dir_name, file_name)
                 };
 
+                // Track unique parent directories
                 let output_path = temp_dir.join(&relative_path);
-
-                // Create parent directories
                 if let Some(parent) = output_path.parent() {
-                    fs::create_dir_all(parent)?;
+                    dirs_needed.insert(parent.to_path_buf());
                 }
 
-                // Extract file
-                match Self::extract_file(file, &output_path) {
-                    Ok(_) => extracted += 1,
-                    Err(e) => {
-                        if failed < 3 {
-                            eprintln!("  Warning: Failed to extract {}: {}", relative_path, e);
-                        }
-                        failed += 1;
-                    }
-                }
-
-                pb.inc(1);
+                entries.push(FileEntry { relative_path, file });
             }
         }
 
+        let total_files = entries.len();
+        println!("Archive opened: {} files found", total_files);
+
+        // Phase 2: Pre-create all directories (single pass, no redundant checks)
+        for dir in &dirs_needed {
+            fs::create_dir_all(dir)?;
+        }
+
+        // Phase 3: Decompress + write in parallel
+        let pb = ProgressBar::new(total_files as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"));
+
+        let extracted = AtomicUsize::new(0);
+        let failed = AtomicUsize::new(0);
+
+        entries.par_iter().for_each(|entry| {
+            let output_path = temp_dir.join(&entry.relative_path);
+
+            let data = if entry.file.is_compressed() {
+                let compressed = entry.file.as_bytes();
+                if compressed.len() >= 4 && compressed[0..4] == LZ4_FRAME_MAGIC {
+                    Self::decompress_lz4_frame(compressed)
+                } else {
+                    entry.file.decompress(&compression_options)
+                        .map(|d| d.as_bytes().to_vec())
+                        .map_err(|e| anyhow::anyhow!("{}", e))
+                }
+            } else {
+                Ok(entry.file.as_bytes().to_vec())
+            };
+
+            match data {
+                Ok(bytes) => {
+                    if fs::write(&output_path, &bytes).is_ok() {
+                        extracted.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Err(_) => {
+                    failed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            pb.inc(1);
+        });
+
         pb.finish_with_message("Extraction complete");
+
+        let extracted = extracted.load(Ordering::Relaxed);
+        let failed = failed.load(Ordering::Relaxed);
 
         println!("\nMPI extraction complete: {} files extracted", extracted);
         if failed > 0 {
@@ -107,26 +269,6 @@ impl MpiExtractor {
         }
 
         Ok(temp_dir)
-    }
-
-    fn extract_file(file: &ba2::tes4::File, output_path: &Path) -> Result<()> {
-        let data = if file.is_compressed() {
-            let compressed = file.as_bytes();
-
-            // Check if this is LZ4 compressed (BSA v105/SSE format)
-            if compressed.len() >= 4 && compressed[0..4] == LZ4_FRAME_MAGIC {
-                // Use LZ4 frame decompression
-                Self::decompress_lz4_frame(compressed)?
-            } else {
-                // Try standard ba2 decompression (zlib)
-                file.decompress(&Default::default())?.as_bytes().to_vec()
-            }
-        } else {
-            file.as_bytes().to_vec()
-        };
-
-        fs::write(output_path, &data)?;
-        Ok(())
     }
 
     /// Decompress LZ4 frame format data

@@ -13,7 +13,7 @@ use sysinfo::System;
 use crate::models::{Asset, Location};
 use crate::services::{
     LocationResolver, BsaHandler, BsaWriterManager, AudioProcessor, AudioFormat, XdeltaManager,
-    BsaCache, MemoryMonitor, MemoryReport, print_ram_status,
+    BsaCache, MemoryMonitor, MemoryReport, MpiStore, print_ram_status,
 };
 
 /// Get number of chunks based on available RAM
@@ -164,6 +164,8 @@ pub struct AssetProcessor {
     /// SQLite-based cache for pre-extracted BSA files (disk-based, low RAM usage)
     bsa_cache: Arc<BsaCache>,
     xdelta: Arc<XdeltaManager>,
+    /// In-memory MPI package (if loaded). Used for instant file lookups.
+    mpi_store: Option<Arc<MpiStore>>,
     mpi_dir: PathBuf,
     dest_dir: PathBuf,
     dry_run: bool,
@@ -274,6 +276,7 @@ impl AssetProcessor {
             bsa_writer: Arc::new(Mutex::new(bsa_writer)),
             bsa_cache: Arc::new(bsa_cache),
             xdelta: Arc::new(xdelta),
+            mpi_store: None,
             mpi_dir,
             dest_dir,
             dry_run: false,
@@ -282,6 +285,12 @@ impl AssetProcessor {
 
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
+        self
+    }
+
+    /// Attach an in-memory MPI store for instant file lookups.
+    pub fn with_mpi_store(mut self, store: MpiStore) -> Self {
+        self.mpi_store = Some(Arc::new(store));
         self
     }
 
@@ -609,19 +618,32 @@ impl AssetProcessor {
         Ok(())
     }
 
+    /// Read a file from the MPI package (in-memory store or disk fallback).
+    fn read_mpi_file(&self, relative_path: &str) -> Result<Vec<u8>> {
+        // Normalize: replace backslashes, strip leading ./ or /
+        let normalized = relative_path.replace('\\', "/");
+        let normalized = normalized.trim_start_matches("./").trim_start_matches('/');
+
+        // Try in-memory store first (instant HashMap lookup)
+        if let Some(ref store) = self.mpi_store {
+            if let Some(data) = store.get(normalized) {
+                return Ok(data.to_vec());
+            }
+        }
+
+        // Fallback: read from disk with case-insensitive lookup
+        let source_path = self.mpi_dir.join(normalized);
+        let actual_path = find_file_case_insensitive(&source_path)
+            .ok_or_else(|| anyhow::anyhow!("File not found in MPI: {} (normalized: {})",
+                source_path.display(), normalized))?;
+
+        fs::read(&actual_path)
+            .with_context(|| format!("Failed to read: {}", actual_path.display()))
+    }
+
     /// New operation: copy new file from MPI package
     fn process_new(&self, asset: &Asset) -> Result<()> {
-        // New files come from the MPI package directory
-        // Normalize path separators for cross-platform
-        let normalized_path = asset.source_path.replace('\\', "/");
-        let source_path = self.mpi_dir.join(&normalized_path);
-
-        // Try case-insensitive lookup for Linux
-        let actual_path = find_file_case_insensitive(&source_path)
-            .ok_or_else(|| anyhow::anyhow!("New file not found in MPI: {}", source_path.display()))?;
-
-        let source_data = fs::read(&actual_path)
-            .with_context(|| format!("Failed to read: {}", actual_path.display()))?;
+        let source_data = self.read_mpi_file(&asset.source_path)?;
 
         if self.dry_run {
             return Ok(());
@@ -638,15 +660,9 @@ impl AssetProcessor {
         // Patch file is named based on TARGET path + ".xd3", not source path!
         let target_file = asset.target_path.as_deref()
             .unwrap_or(&asset.source_path);
-        let patch_file_name = format!("{}.xd3", target_file).replace('\\', "/");
-        let patch_path = self.mpi_dir.join(&patch_file_name);
+        let patch_file_name = format!("{}.xd3", target_file);
 
-        // Try case-insensitive lookup for Linux
-        let actual_patch_path = find_file_case_insensitive(&patch_path)
-            .ok_or_else(|| anyhow::anyhow!("Patch file not found: {}", patch_path.display()))?;
-
-        let patch_data = fs::read(&actual_patch_path)
-            .with_context(|| format!("Failed to read patch: {}", actual_patch_path.display()))?;
+        let patch_data = self.read_mpi_file(&patch_file_name)?;
 
         if self.dry_run {
             return Ok(());
@@ -812,31 +828,34 @@ impl AssetProcessor {
     }
 
     // ========================================================================
-    // PRODUCER-CONSUMER MODE - Overlapped extraction and processing
+    // OVERLAPPED PIPELINE - Decompress → Process → Build BSAs concurrently
     // ========================================================================
 
-    /// Process assets using sequential BSA extraction with full-thread parallel decompression.
+    /// Process assets with a fully overlapped pipeline:
     ///
-    /// Benchmarking shows this is as fast as all-parallel extraction but uses ~3x less RAM:
-    /// - Sequential: ~1.4 GB peak for full extraction
-    /// - All-parallel: ~4.7 GB peak for same work
-    /// - Throughput is identical (~7.7 GB/s) because decompression is CPU-bound
+    /// 1. Decompressor threads open source BSAs and decompress matched files
+    /// 2. Decompressed files are sent via channel to the worker pool
+    /// 3. Workers immediately process each file (copy/patch/audio)
+    /// 4. Processed results are written to BSA staging files
+    /// 5. When an output BSA has all its files staged, a background thread builds it
     ///
-    /// Pipeline per BSA:
-    /// 1. Open BSA, scan for matching files (fast)
-    /// 2. Decompress matched files in parallel across all CPU cores
-    /// 3. Process each decompressed file (patch/audio/copy) immediately
-    /// 4. Write result to BSA staging or output directory
-    /// 5. Drop data, move to next BSA
+    /// This overlaps decompression with audio processing with BSA building,
+    /// keeping all CPU cores busy throughout the entire install.
     pub fn process_assets_streaming(&self, assets: &[Asset]) -> Result<ProcessingStats> {
+        use crossbeam_channel::bounded;
+
         let monitor = MemoryMonitor::start(std::time::Duration::from_millis(250));
         print_ram_status("Start");
 
-        info!("Using sequential BSA pipeline (full-thread decompression per BSA)");
+        let num_cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        info!("Using overlapped pipeline ({} CPUs)", num_cpus);
 
-        // === Step 1: Group assets by source BSA ===
+        // === Step 1: Group assets by source BSA and build readiness map ===
         let mut bsa_assets: HashMap<PathBuf, Vec<&Asset>> = HashMap::new();
         let mut dir_assets: Vec<&Asset> = Vec::new();
+
+        // Track expected file count per output BSA for readiness detection
+        let mut expected_counts: HashMap<i32, AtomicUsize> = HashMap::new();
 
         for asset in assets {
             if self.resolver.is_bsa_location(asset.source_loc) {
@@ -846,22 +865,37 @@ impl AssetProcessor {
             } else {
                 dir_assets.push(asset);
             }
+
+            // Count files expected per output BSA
+            let writer = self.bsa_writer.lock().unwrap();
+            if writer.is_bsa_location(asset.target_loc) {
+                expected_counts.entry(asset.target_loc)
+                    .or_insert_with(|| AtomicUsize::new(0))
+                    .fetch_add(1, Ordering::Relaxed);
+            }
         }
 
+        // Snapshot expected counts (immutable after this point)
+        let expected: HashMap<i32, usize> = expected_counts.iter()
+            .map(|(k, v)| (*k, v.load(Ordering::Relaxed)))
+            .collect();
+        let staged_counts: HashMap<i32, AtomicUsize> = expected.keys()
+            .map(|k| (*k, AtomicUsize::new(0)))
+            .collect();
+        let staged_counts = Arc::new(staged_counts);
+
         let mut bsa_entries: Vec<_> = bsa_assets.into_iter().collect();
-        // Sort by size descending - process largest BSAs first for better progress visibility
         bsa_entries.sort_by(|a, b| {
             let size_a = fs::metadata(&a.0).map(|m| m.len()).unwrap_or(0);
             let size_b = fs::metadata(&b.0).map(|m| m.len()).unwrap_or(0);
             size_b.cmp(&size_a)
         });
 
-        let num_bsas = bsa_entries.len();
+        let num_source_bsas = bsa_entries.len();
         let total_assets = assets.len();
 
-        println!("\nSequential BSA pipeline ({} source BSAs, {} threads):",
-            num_bsas,
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+        println!("\nOverlapped pipeline ({} source BSAs, {} output BSAs, {} threads):",
+            num_source_bsas, expected.len(), num_cpus);
         for (i, (path, assets_list)) in bsa_entries.iter().take(8).enumerate() {
             let size = fs::metadata(path).map(|m| m.len() / 1024 / 1024).unwrap_or(0);
             let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
@@ -883,14 +917,52 @@ impl AssetProcessor {
             .unwrap()
             .progress_chars("#>-"));
 
-        // === Step 2: Process BSAs sequentially, decompress+process in parallel ===
+        // === Step 2: Background BSA builder ===
+        // Channel for sending ready BSA location indices to the builder thread
+        let (bsa_ready_tx, bsa_ready_rx) = bounded::<i32>(32);
+        let bsa_writer_clone = self.bsa_writer.clone();
+        let dest_dir = self.dest_dir.clone();
+        let bsa_build_success = Arc::new(AtomicUsize::new(0));
+        let bsa_build_fail = Arc::new(AtomicUsize::new(0));
+        let bsa_build_success_ref = bsa_build_success.clone();
+        let bsa_build_fail_ref = bsa_build_fail.clone();
+
+        let bsa_builder_handle = std::thread::Builder::new()
+            .name("bsa-builder".into())
+            .spawn(move || {
+                for loc_idx in bsa_ready_rx {
+                    let mut writer = bsa_writer_clone.lock().unwrap();
+                    if let Some((bsa_name, builder)) = writer.take_builder(loc_idx) {
+                        let file_count = builder.file_count();
+                        let output_path = dest_dir.join(&bsa_name);
+                        drop(writer); // Release lock during build
+
+                        println!("  [BSA] Building {} ({} files)...", bsa_name, file_count);
+                        match builder.build(&output_path) {
+                            Ok(_) => {
+                                let size_mb = fs::metadata(&output_path).map(|m| m.len() / 1024 / 1024).unwrap_or(0);
+                                println!("  [BSA] {} ... OK ({} MB)", bsa_name, size_mb);
+                                bsa_build_success_ref.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                warn!("BSA build failed: {} - {}", bsa_name, e);
+                                println!("  [BSA] {} ... FAILED: {}", bsa_name, e);
+                                bsa_build_fail_ref.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("Failed to spawn BSA builder thread");
+
+        // === Step 3: Process source BSAs - decompress + process, check readiness ===
         for (bsa_idx, (bsa_path, assets_for_bsa)) in bsa_entries.iter().enumerate() {
             let bsa_name = bsa_path.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
             pb.set_message(format!("BSA {}/{}: {} ({} files)",
-                bsa_idx + 1, num_bsas, bsa_name, assets_for_bsa.len()));
+                bsa_idx + 1, num_source_bsas, bsa_name, assets_for_bsa.len()));
 
             // Build lookup: normalized_path -> Vec<Asset>
             let mut path_to_assets: HashMap<String, Vec<&Asset>> = HashMap::new();
@@ -914,17 +986,13 @@ impl AssetProcessor {
             };
             let compression_options = FcOpts::from(&options);
 
-            // Phase 1: Scan archive for matching files (fast, single-threaded)
+            // Scan archive for matching files (fast, single-threaded)
             let mut matched: Vec<(Vec<&Asset>, &ba2::tes4::File<'_>)> = Vec::new();
             {
                 use ba2::ByteSlice;
                 for (dir_key, folder) in archive.iter() {
-                    if path_to_assets.is_empty() {
-                        break;
-                    }
-
+                    if path_to_assets.is_empty() { break; }
                     let dir_name = String::from_utf8_lossy(dir_key.name().as_bytes()).to_lowercase();
-
                     for (file_key, file) in folder.iter() {
                         let file_name = String::from_utf8_lossy(file_key.name().as_bytes()).to_lowercase();
                         let full_path = if dir_name.is_empty() || dir_name == "." {
@@ -932,7 +1000,6 @@ impl AssetProcessor {
                         } else {
                             format!("{}\\{}", dir_name, file_name)
                         };
-
                         if let Some(assets_needing) = path_to_assets.remove(&full_path) {
                             matched.push((assets_needing, file));
                         }
@@ -940,15 +1007,17 @@ impl AssetProcessor {
                 }
             }
 
-            // Phase 2: Decompress + process in parallel (all CPU cores)
+            // Decompress + process in parallel, track readiness
             let success_ref = &success;
             let failed_ref = &failed;
             let errors_ref = &errors;
             let pb_ref = &pb;
             let timings_ref = &op_timings;
+            let staged_ref = &staged_counts;
+            let expected_ref = &expected;
+            let ready_tx = &bsa_ready_tx;
 
             matched.par_iter().for_each(|(assets_needing, file)| {
-                // Decompress (CPU-intensive, benefits from parallelism)
                 let decompress_start = Instant::now();
                 let data = if file.is_decompressed() {
                     file.as_bytes().to_vec()
@@ -972,14 +1041,13 @@ impl AssetProcessor {
                 };
                 timings_ref.record_decompress(decompress_start.elapsed().as_nanos() as u64);
 
-                // Process each asset that needs this file
                 for asset in assets_needing {
                     let op_start = Instant::now();
                     let result = self.process_asset_with_data(asset, &data);
                     if let Some(op) = OpType::from_i32(asset.op_type) {
                         timings_ref.record(op, op_start.elapsed().as_nanos() as u64);
                     }
-                    match result {
+                    match &result {
                         Ok(_) => { success_ref.fetch_add(1, Ordering::Relaxed); }
                         Err(e) => {
                             failed_ref.fetch_add(1, Ordering::Relaxed);
@@ -991,20 +1059,33 @@ impl AssetProcessor {
                         }
                     }
                     pb_ref.inc(1);
+
+                    // Track readiness: if this file went to a BSA target, check if that BSA is complete
+                    if result.is_ok() {
+                        if let Some(counter) = staged_ref.get(&asset.target_loc) {
+                            let new_count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                            if let Some(&expected_count) = expected_ref.get(&asset.target_loc) {
+                                if new_count == expected_count {
+                                    // This output BSA has all files staged - send to builder
+                                    let _ = ready_tx.send(asset.target_loc);
+                                }
+                            }
+                        }
+                    }
                 }
-                // data is dropped here - keeps RAM low
             });
 
-            // Log RAM after each BSA
+            // Log progress after each source BSA
             if (bsa_idx + 1) % 5 == 0 || bsa_idx == 0 {
                 let peak = monitor.peak_rss_mb();
                 let current = monitor.current_rss_mb();
-                pb.set_message(format!("BSA {}/{} done | RAM: {:.0} MB (peak {:.0} MB)",
-                    bsa_idx + 1, num_bsas, current, peak));
+                let built = bsa_build_success.load(Ordering::Relaxed);
+                pb.set_message(format!("BSA {}/{} | RAM: {:.0} MB (peak {:.0}) | {} output BSAs built",
+                    bsa_idx + 1, num_source_bsas, current, peak, built));
             }
         }
 
-        // === Step 3: Process directory assets ===
+        // === Step 4: Process directory assets ===
         if !dir_assets.is_empty() {
             pb.set_message(format!("Processing {} directory assets...", dir_assets.len()));
             dir_assets.par_iter().for_each(|asset| {
@@ -1013,7 +1094,7 @@ impl AssetProcessor {
                 if let Some(op) = OpType::from_i32(asset.op_type) {
                     op_timings.record(op, op_start.elapsed().as_nanos() as u64);
                 }
-                match result {
+                match &result {
                     Ok(_) => { success.fetch_add(1, Ordering::Relaxed); }
                     Err(e) => {
                         failed.fetch_add(1, Ordering::Relaxed);
@@ -1025,16 +1106,74 @@ impl AssetProcessor {
                     }
                 }
                 pb.inc(1);
+
+                // Track readiness for directory assets too
+                if result.is_ok() {
+                    if let Some(counter) = staged_counts.get(&asset.target_loc) {
+                        let new_count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                        if let Some(&expected_count) = expected.get(&asset.target_loc) {
+                            if new_count == expected_count {
+                                let _ = bsa_ready_tx.send(asset.target_loc);
+                            }
+                        }
+                    }
+                }
             });
+        }
+
+        // === Step 5: Signal builder thread to finish, build any remaining BSAs ===
+        drop(bsa_ready_tx);
+
+        // Wait for background builds to complete
+        bsa_builder_handle.join().expect("BSA builder thread panicked");
+
+        // Build any BSAs that weren't triggered by readiness (edge case: errors reduced count)
+        {
+            let mut writer = self.bsa_writer.lock().unwrap();
+            let remaining_keys: Vec<i32> = writer.bsa_location_indices()
+                .into_iter()
+                .filter(|idx| writer.file_count(*idx).unwrap_or(0) > 0)
+                .collect();
+
+            if !remaining_keys.is_empty() {
+                println!("\n  Building {} remaining BSAs...", remaining_keys.len());
+                for loc_idx in remaining_keys {
+                    if let Some((bsa_name, builder)) = writer.take_builder(loc_idx) {
+                        let file_count = builder.file_count();
+                        let output_path = self.dest_dir.join(&bsa_name);
+                        drop(writer); // Release during build
+
+                        println!("  [BSA] {} ({} files)...", bsa_name, file_count);
+                        match builder.build(&output_path) {
+                            Ok(_) => {
+                                let size_mb = fs::metadata(&output_path).map(|m| m.len() / 1024 / 1024).unwrap_or(0);
+                                println!("  [BSA] {} ... OK ({} MB)", bsa_name, size_mb);
+                                bsa_build_success.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                println!("  [BSA] {} ... FAILED: {}", bsa_name, e);
+                                bsa_build_fail.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        writer = self.bsa_writer.lock().unwrap();
+                    }
+                }
+            }
         }
 
         let final_success = success.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
+        let bsa_ok = bsa_build_success.load(Ordering::Relaxed);
+        let bsa_err = bsa_build_fail.load(Ordering::Relaxed);
 
-        pb.finish_with_message(format!("Done: {} success, {} failed", final_success, final_failed));
+        pb.finish_with_message(format!("Done: {} success, {} failed | {} BSAs built",
+            final_success, final_failed, bsa_ok));
 
         let memory_report = monitor.stop();
         print_ram_status("End");
+
+        println!("\n  BSA archives: {}/{} built ({} failed)",
+            bsa_ok, bsa_ok + bsa_err, bsa_err);
 
         let final_errors = Arc::try_unwrap(errors)
             .unwrap_or_else(|e| e.lock().unwrap().clone().into())
@@ -1076,14 +1215,8 @@ impl AssetProcessor {
             OpType::Patch => {
                 let target_file = asset.target_path.as_deref()
                     .unwrap_or(&asset.source_path);
-                let patch_file_name = format!("{}.xd3", target_file).replace('\\', "/");
-                let patch_path = self.mpi_dir.join(&patch_file_name);
-
-                let actual_patch_path = find_file_case_insensitive(&patch_path)
-                    .ok_or_else(|| anyhow::anyhow!("Patch file not found: {}", patch_path.display()))?;
-
-                let patch_data = fs::read(&actual_patch_path)
-                    .with_context(|| format!("Failed to read patch: {}", actual_patch_path.display()))?;
+                let patch_file_name = format!("{}.xd3", target_file);
+                let patch_data = self.read_mpi_file(&patch_file_name)?;
 
                 if !self.dry_run {
                     let patched = self.xdelta.apply_patch_from_bytes(source_data, &patch_data)?;
