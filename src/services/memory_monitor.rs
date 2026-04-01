@@ -121,15 +121,37 @@ impl Drop for MemoryMonitor {
     }
 }
 
-/// Read process RSS from /proc/self/statm (Linux-specific, very fast).
+/// Read process RSS in bytes (cross-platform via sysinfo).
 fn get_rss_bytes() -> u64 {
-    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
-        let parts: Vec<&str> = statm.split_whitespace().collect();
-        if parts.len() >= 2 {
-            if let Ok(rss_pages) = parts[1].parse::<u64>() {
-                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-                return rss_pages * page_size;
+    // Linux fast path: /proc/self/statm
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+            let parts: Vec<&str> = statm.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let Ok(rss_pages) = parts[1].parse::<u64>() {
+                    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+                    return rss_pages * page_size;
+                }
             }
+        }
+    }
+
+    // Cross-platform fallback: use sysinfo
+    #[cfg(not(target_os = "linux"))]
+    {
+        use sysinfo::{Pid, System, ProcessRefreshKind, RefreshKind, UpdateKind};
+        let pid = Pid::from_u32(std::process::id());
+        let mut sys = System::new_with_specifics(
+            RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_memory()),
+        );
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_memory(),
+        );
+        if let Some(process) = sys.process(pid) {
+            return process.memory();
         }
     }
     0
