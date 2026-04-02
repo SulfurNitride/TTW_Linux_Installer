@@ -263,16 +263,22 @@ fn run_install(
     let assets = ManifestLoader::parse_assets(&manifest)?;
     info!("Parsed {} assets", assets.len());
 
-    // Get locations (profile 0 for Linux)
-    let locations = ManifestLoader::get_locations(&manifest, 0)?;
+    // Select best profile (avoids profiles with hardcoded Windows paths)
+    let profile_index = ManifestLoader::select_best_profile(&manifest);
+    info!("Using profile {}", profile_index);
+
+    // Get locations for selected profile
+    let locations = ManifestLoader::get_locations(&manifest, profile_index)?;
     info!("Loaded {} locations", locations.len());
 
     // Get BSA targets from the best profile (may be Profile 1 with proper flags)
     let bsa_targets = ManifestLoader::get_bsa_target_locations(&manifest)?;
     info!("Found {} BSA targets", bsa_targets.len());
 
-    // Get variables from manifest (profile 0 for Linux)
-    let variables = ManifestLoader::get_variables(&manifest, 0).unwrap_or_default();
+    // Get variables from selected profile, fall back to profile 0
+    let variables = ManifestLoader::get_variables(&manifest, profile_index)
+        .or_else(|_| ManifestLoader::get_variables(&manifest, 0))
+        .unwrap_or_default();
 
     // Create config with provided paths (empty string if not provided)
     let destination_path = dest.to_string_lossy().to_string();

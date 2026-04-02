@@ -152,6 +152,61 @@ impl ManifestLoader {
         Ok(variables[profile_index].clone())
     }
 
+    /// Select the best profile index for Linux installation.
+    /// Some MPI files have Profile 0 with hardcoded Windows paths (e.g., C:\Users\...)
+    /// while Profile 1 uses proper %DESTINATION% variables. On Linux we prefer the
+    /// profile that uses variables, since we substitute them with CLI-provided paths.
+    pub fn select_best_profile(manifest: &TtwManifest) -> usize {
+        let locations = match &manifest.locations {
+            Some(locs) if !locs.is_empty() => locs,
+            _ => return 0,
+        };
+
+        // Check if Profile 0 has hardcoded Windows paths in directory locations
+        if let Some(profile0) = locations.first() {
+            let has_hardcoded_windows_path = profile0.iter().any(|loc| {
+                if loc.loc_type != 0 {
+                    return false; // Only check directory locations
+                }
+                let value = loc.value.as_deref().unwrap_or("");
+                // Detect Windows absolute paths: C:\..., D:\..., etc.
+                Self::is_windows_absolute_path(value)
+            });
+
+            if has_hardcoded_windows_path && locations.len() > 1 {
+                // Check if another profile uses %DESTINATION% or other variables instead
+                for (idx, profile) in locations.iter().enumerate().skip(1) {
+                    let uses_variables = profile.iter().all(|loc| {
+                        let value = loc.value.as_deref().unwrap_or("");
+                        // Either uses variables, or is a BSA source path (Type 1) which is fine
+                        loc.loc_type != 0 || value.contains('%') || value.is_empty()
+                    });
+
+                    if uses_variables {
+                        println!("  Profile 0 has hardcoded Windows paths, using Profile {} instead", idx);
+                        return idx;
+                    }
+                }
+            }
+        }
+
+        0
+    }
+
+    /// Check if a path looks like a Windows absolute path
+    fn is_windows_absolute_path(path: &str) -> bool {
+        let path = path.trim();
+        // Match patterns like C:\, D:\, C:/, D:/, etc.
+        if path.len() >= 3 {
+            let bytes = path.as_bytes();
+            bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && (bytes[2] == b'\\' || bytes[2] == b'/')
+        } else {
+            false
+        }
+    }
+
     /// Get BSA target locations from the best available profile
     /// Some MPI files have BSA targets in Profile 1 (Windows) but not Profile 0 (Linux)
     /// This method searches all profiles for Type 2 BSA targets with proper flags

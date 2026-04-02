@@ -519,7 +519,11 @@ fn run_installation(
     let total_assets = assets.len();
     log(&format!("Parsed {} assets", total_assets));
 
-    let locations = ManifestLoader::get_locations(&manifest, 0)
+    // Select best profile (avoids profiles with hardcoded Windows paths)
+    let profile_index = ManifestLoader::select_best_profile(&manifest);
+    log(&format!("Using profile {}", profile_index));
+
+    let locations = ManifestLoader::get_locations(&manifest, profile_index)
         .map_err(|e| format!("Failed to get locations: {}", e))?;
 
     let bsa_targets = ManifestLoader::get_bsa_target_locations(&manifest)
@@ -527,7 +531,9 @@ fn run_installation(
     let total_bsas = bsa_targets.len();
     log(&format!("Found {} BSA targets", total_bsas));
 
-    let variables = ManifestLoader::get_variables(&manifest, 0).unwrap_or_default();
+    let variables = ManifestLoader::get_variables(&manifest, profile_index)
+        .or_else(|_| ManifestLoader::get_variables(&manifest, 0))
+        .unwrap_or_default();
     progress.store(1000, Ordering::Relaxed); // 10%
 
     // Create config and resolver

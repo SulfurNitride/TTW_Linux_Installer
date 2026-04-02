@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tracing::warn;
 use crate::models::{Location, InstallConfig, Variable};
 
 /// Resolves location indices to actual file paths
@@ -190,6 +191,23 @@ impl LocationResolver {
         // Convert Windows paths to Unix paths
         if std::path::MAIN_SEPARATOR == '/' {
             resolved = resolved.replace('\\', "/");
+        }
+
+        // Safety net: if the resolved path is still a Windows absolute path
+        // (e.g., C:/Users/...), replace it with the destination path.
+        // This handles MPI files where Profile 0 has hardcoded Windows paths.
+        if resolved.len() >= 3 {
+            let bytes = resolved.as_bytes();
+            if bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && (bytes[2] == b'/' || bytes[2] == b'\\')
+            {
+                warn!(
+                    "Resolved path is a Windows absolute path: {} — replacing with destination: {}",
+                    resolved, self.config.destination_path
+                );
+                resolved = self.config.destination_path.clone();
+            }
         }
 
         resolved
