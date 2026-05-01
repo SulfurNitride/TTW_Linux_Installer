@@ -128,7 +128,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
-            .with_min_inner_size([600.0, 400.0]),
+            .with_min_inner_size([480.0, 360.0]),
         ..Default::default()
     };
 
@@ -223,43 +223,54 @@ impl eframe::App for MpiInstallerApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-            // Title
-            ui.heading(egui::RichText::new("MPI Installer").size(24.0));
-            ui.add_space(5.0);
+            let small_screen = ui.available_height() < 500.0;
+            let heading_size = if small_screen { 18.0 } else { 24.0 };
+            let log_height = if small_screen { 100.0 } else { 180.0 };
 
-            self.show_installer_tab(ui);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    // Title
+                    ui.heading(egui::RichText::new("MPI Installer").size(heading_size));
+                    ui.add_space(5.0);
 
-            ui.add_space(10.0);
+                    self.show_installer_tab(ui);
 
-            // Progress bar (shared)
-            ui.horizontal(|ui| {
-                let progress_value = self.progress.load(Ordering::Relaxed) as f32 / 10000.0;
-                let progress_bar = egui::ProgressBar::new(progress_value).show_percentage();
-                ui.add_sized([680.0, 20.0], progress_bar);
+                    ui.add_space(10.0);
 
-                let status_text = match &self.status {
-                    InstallStatus::Ready => "Ready",
-                    InstallStatus::Running => "Running...",
-                    InstallStatus::Complete => "Complete",
-                    InstallStatus::Failed(_) => "Failed",
-                };
-                ui.label(status_text);
-            });
+                    // Progress bar (shared)
+                    ui.horizontal(|ui| {
+                        let progress_value =
+                            self.progress.load(Ordering::Relaxed) as f32 / 10000.0;
+                        let progress_bar =
+                            egui::ProgressBar::new(progress_value).show_percentage();
+                        let avail = (ui.available_width() - 80.0).max(120.0);
+                        ui.add_sized([avail, 20.0], progress_bar);
 
-            ui.add_space(10.0);
-
-            // Log output panel (shared)
-            ui.group(|ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(180.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        let logs = self.log_messages.lock().unwrap();
-                        for msg in logs.iter() {
-                            ui.label(msg);
-                        }
+                        let status_text = match &self.status {
+                            InstallStatus::Ready => "Ready",
+                            InstallStatus::Running => "Running...",
+                            InstallStatus::Complete => "Complete",
+                            InstallStatus::Failed(_) => "Failed",
+                        };
+                        ui.label(status_text);
                     });
-            });
+
+                    ui.add_space(10.0);
+
+                    // Log output panel (shared)
+                    ui.group(|ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(log_height)
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                let logs = self.log_messages.lock().unwrap();
+                                for msg in logs.iter() {
+                                    ui.label(msg);
+                                }
+                            });
+                    });
+                });
         });
 
         // Request repaint while running
@@ -291,6 +302,10 @@ impl MpiInstallerApp {
     }
 
     fn show_installer_tab(&mut self, ui: &mut egui::Ui) {
+        // Reserve space for label column (~140) and Browse button (~80) plus spacing
+        let total_w = ui.available_width();
+        let edit_w = (total_w - 240.0).max(160.0);
+
         // Path inputs grid
         egui::Grid::new("paths_grid")
             .num_columns(3)
@@ -299,7 +314,7 @@ impl MpiInstallerApp {
                 // Fallout 3
                 ui.label("Fallout 3:");
                 ui.add_sized(
-                    [500.0, 20.0],
+                    [edit_w, 20.0],
                     egui::TextEdit::singleline(&mut self.fo3_path)
                         .hint_text("Path to Fallout 3 installation (optional)"),
                 );
@@ -314,7 +329,7 @@ impl MpiInstallerApp {
                 // Fallout New Vegas
                 ui.label("Fallout New Vegas:");
                 ui.add_sized(
-                    [500.0, 20.0],
+                    [edit_w, 20.0],
                     egui::TextEdit::singleline(&mut self.fnv_path)
                         .hint_text("Path to Fallout New Vegas installation (optional)"),
                 );
@@ -329,7 +344,7 @@ impl MpiInstallerApp {
                 // Oblivion
                 ui.label("Oblivion:");
                 ui.add_sized(
-                    [500.0, 20.0],
+                    [edit_w, 20.0],
                     egui::TextEdit::singleline(&mut self.oblivion_path)
                         .hint_text("Path to Oblivion installation (optional)"),
                 );
@@ -344,7 +359,7 @@ impl MpiInstallerApp {
                 // MPI Package
                 ui.label("MPI Package:");
                 ui.add_sized(
-                    [500.0, 20.0],
+                    [edit_w, 20.0],
                     egui::TextEdit::singleline(&mut self.mpi_path)
                         .hint_text("Path to .mpi file or extracted package folder"),
                 );
@@ -358,7 +373,7 @@ impl MpiInstallerApp {
                 // Output Directory
                 ui.label("Output Directory:");
                 ui.add_sized(
-                    [500.0, 20.0],
+                    [edit_w, 20.0],
                     egui::TextEdit::singleline(&mut self.output_path)
                         .hint_text("Where to install output files"),
                 );
@@ -378,8 +393,9 @@ impl MpiInstallerApp {
             && !self.mpi_path.is_empty()
             && !self.output_path.is_empty();
 
+        let btn_w = ui.available_width().max(200.0);
         let button = egui::Button::new(egui::RichText::new("Start Installation").size(16.0))
-            .min_size(egui::vec2(760.0, 30.0));
+            .min_size(egui::vec2(btn_w, 30.0));
 
         if ui.add_enabled(can_install, button).clicked() {
             self.start_installation();
