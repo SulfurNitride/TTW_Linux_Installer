@@ -1,12 +1,13 @@
 use anyhow::{bail, Result};
+use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::app::InstallEvent;
-use crate::models::InstallConfig;
+use crate::models::{Check, InstallConfig};
 use crate::services::{
-    AssetProcessor, FileVerifier, GameDetection, LocationResolver, ManifestLoader, MpiExtractor,
-    MpiStore, XdeltaManager,
+    compute_md5, compute_sha1, AssetProcessor, FileVerifier, GameDetection, LocationResolver,
+    ManifestLoader, MpiExtractor, MpiStore, XdeltaManager,
 };
 
 #[derive(Debug, Clone)]
@@ -38,8 +39,10 @@ where
 {
     let install_start = Instant::now();
 
+    log_requested_paths(&request, &emit);
     validate_request(&request)?;
     let game_paths = resolve_game_paths(&request, &emit);
+    log_resolved_game_paths(&game_paths, &emit);
 
     emit(InstallEvent::log("Loading MPI package..."));
     emit(InstallEvent::progress(0, 10_000, "Preparing MPI package"));
@@ -114,6 +117,7 @@ where
 
     let checks = ManifestLoader::get_checks(&manifest);
     if !checks.is_empty() {
+        log_check_file_diagnostics(&FileVerifier::new(&resolver), &checks, &emit);
         emit(InstallEvent::log(format!(
             "Running {} pre-installation checks...",
             checks.len()
@@ -280,6 +284,136 @@ fn validate_request(request: &InstallRequest) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn log_requested_paths<F>(request: &InstallRequest, emit: &F)
+where
+    F: Fn(InstallEvent) + Sync,
+{
+    emit(InstallEvent::log("Install request paths:"));
+    emit(InstallEvent::log(format!(
+        "  MPI package: {}",
+        request.mpi_path.display()
+    )));
+    emit(InstallEvent::log(format!(
+        "  Fallout 3: {}",
+        optional_path(request.fallout3_path.as_ref())
+    )));
+    emit(InstallEvent::log(format!(
+        "  Fallout New Vegas: {}",
+        optional_path(request.falloutnv_path.as_ref())
+    )));
+    emit(InstallEvent::log(format!(
+        "  Oblivion: {}",
+        optional_path(request.oblivion_path.as_ref())
+    )));
+    emit(InstallEvent::log(format!(
+        "  Output: {}",
+        request.destination_path.display()
+    )));
+}
+
+fn log_resolved_game_paths<F>(paths: &ResolvedGamePaths, emit: &F)
+where
+    F: Fn(InstallEvent) + Sync,
+{
+    emit(InstallEvent::log("Resolved game paths:"));
+    emit(InstallEvent::log(format!(
+        "  Fallout 3: {}",
+        optional_path(paths.fallout3.as_ref())
+    )));
+    emit(InstallEvent::log(format!(
+        "  Fallout New Vegas: {}",
+        optional_path(paths.falloutnv.as_ref())
+    )));
+    emit(InstallEvent::log(format!(
+        "  Oblivion: {}",
+        optional_path(paths.oblivion.as_ref())
+    )));
+}
+
+fn log_check_file_diagnostics<F>(verifier: &FileVerifier<'_>, checks: &[Check], emit: &F)
+where
+    F: Fn(InstallEvent) + Sync,
+{
+    let file_checks: Vec<(usize, &Check)> = checks
+        .iter()
+        .enumerate()
+        .filter(|(_, check)| check.check_type == 0 && check.file.is_some())
+        .collect();
+
+    if file_checks.is_empty() {
+        return;
+    }
+
+    emit(InstallEvent::log("Pre-check file diagnostics:"));
+    for (index, check) in file_checks {
+        match verifier.check_file_path(check) {
+            Ok(path) => {
+                let metadata = fs::metadata(&path);
+                match metadata {
+                    Ok(metadata) => emit(InstallEvent::log(format!(
+                        "  [{}] {} exists, size {}",
+                        index + 1,
+                        path.display(),
+                        format_bytes(metadata.len())
+                    ))),
+                    Err(err) => emit(InstallEvent::log(format!(
+                        "  [{}] {} missing/unreadable: {}",
+                        index + 1,
+                        path.display(),
+                        err
+                    ))),
+                }
+
+                if check
+                    .checksums
+                    .as_ref()
+                    .is_some_and(|checksums| !checksums.trim().is_empty())
+                {
+                    match fs::read(&path) {
+                        Ok(data) => emit(InstallEvent::log(format!(
+                            "  [{}] hashes: sha1={}, md5={}",
+                            index + 1,
+                            compute_sha1(&data),
+                            compute_md5(&data)
+                        ))),
+                        Err(err) => emit(InstallEvent::log(format!(
+                            "  [{}] hashes unavailable: {}",
+                            index + 1,
+                            err
+                        ))),
+                    }
+                }
+            }
+            Err(err) => emit(InstallEvent::log(format!(
+                "  [{}] could not resolve check file path: {}",
+                index + 1,
+                err
+            ))),
+        }
+    }
+}
+
+fn optional_path(path: Option<&PathBuf>) -> String {
+    path.map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<not provided>".to_string())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{:.2} {}", value, UNITS[unit])
+    }
 }
 
 #[derive(Debug, Clone, Default)]

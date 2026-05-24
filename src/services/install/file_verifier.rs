@@ -64,6 +64,11 @@ impl<'a> FileVerifier<'a> {
         Self { resolver }
     }
 
+    /// Resolve the path that a manifest check will read.
+    pub fn check_file_path(&self, check: &Check) -> Result<PathBuf> {
+        self.resolve_check_path(check)
+    }
+
     /// Run all checks from the manifest
     pub fn run_checks(&self, checks: &[Check]) -> Result<VerificationResult> {
         let mut result = VerificationResult {

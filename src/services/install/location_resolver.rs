@@ -2,7 +2,6 @@ use crate::models::{InstallConfig, Location, Variable};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::warn;
 
 /// Resolves location indices to actual file paths
 pub struct LocationResolver {
@@ -210,21 +209,17 @@ impl LocationResolver {
             resolved = resolved.replace('\\', "/");
         }
 
-        // Safety net: if the resolved path is still a Windows absolute path
-        // (e.g., C:/Users/...), replace it with the destination path.
-        // This handles MPI files where Profile 0 has hardcoded Windows paths.
-        if resolved.len() >= 3 {
-            let bytes = resolved.as_bytes();
-            if bytes[0].is_ascii_alphabetic()
-                && bytes[1] == b':'
-                && (bytes[2] == b'/' || bytes[2] == b'\\')
-            {
-                warn!(
-                    "Resolved path is a Windows absolute path: {} — replacing with destination: {}",
-                    resolved, self.config.destination_path
-                );
-                resolved = self.config.destination_path.clone();
-            }
+        // Safety net for Linux/Wine installs: if an MPI manifest leaves a
+        // hardcoded Windows absolute path behind, route it to the output
+        // directory instead of creating a C: tree.
+        #[cfg(not(windows))]
+        if is_windows_absolute_path(&resolved) {
+            tracing::warn!(
+                "Resolved path is a Windows absolute path: {} — replacing with destination: {}",
+                resolved,
+                self.config.destination_path
+            );
+            resolved = self.config.destination_path.clone();
         }
 
         resolved
@@ -249,5 +244,95 @@ impl LocationResolver {
                 resolved.display()
             );
         }
+    }
+}
+
+#[cfg(not(windows))]
+fn is_windows_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LocationResolver;
+    use crate::models::{InstallConfig, Location};
+    use std::path::PathBuf;
+
+    fn config() -> InstallConfig {
+        InstallConfig {
+            fallout3_root: r"D:\Games\Fallout 3".to_string(),
+            falloutnv_root: r"C:\Steam\steamapps\common\Fallout New Vegas".to_string(),
+            oblivion_root: String::new(),
+            destination_path: r"D:\Games\TTW Output".to_string(),
+            mpi_package_path: String::new(),
+        }
+    }
+
+    fn resolver() -> LocationResolver {
+        LocationResolver::new(
+            vec![
+                Location {
+                    name: Some("FO3 Root".to_string()),
+                    loc_type: 0,
+                    value: Some("%FO3ROOT%".to_string()),
+                    create_folder: None,
+                    archive_type: None,
+                    archive_flags: None,
+                    files_flags: None,
+                    archive_compressed: None,
+                },
+                Location {
+                    name: Some("FNV Root".to_string()),
+                    loc_type: 0,
+                    value: Some("%FNVROOT%".to_string()),
+                    create_folder: None,
+                    archive_type: None,
+                    archive_flags: None,
+                    files_flags: None,
+                    archive_compressed: None,
+                },
+                Location {
+                    name: Some("Destination".to_string()),
+                    loc_type: 0,
+                    value: Some("%DESTINATION%".to_string()),
+                    create_folder: None,
+                    archive_type: None,
+                    archive_flags: None,
+                    files_flags: None,
+                    archive_compressed: None,
+                },
+            ],
+            config(),
+        )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_stay_on_game_roots_on_windows() {
+        assert_eq!(
+            resolver().resolve_path(0).unwrap(),
+            PathBuf::from(r"D:\Games\Fallout 3")
+        );
+        assert_eq!(
+            resolver().resolve_path(1).unwrap(),
+            PathBuf::from(r"C:\Steam\steamapps\common\Fallout New Vegas")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn windows_paths_fall_back_to_destination_on_non_windows() {
+        assert_eq!(
+            resolver().resolve_path(0).unwrap(),
+            PathBuf::from(r"D:\Games\TTW Output")
+        );
+        assert_eq!(
+            resolver().resolve_path(1).unwrap(),
+            PathBuf::from(r"D:\Games\TTW Output")
+        );
     }
 }
