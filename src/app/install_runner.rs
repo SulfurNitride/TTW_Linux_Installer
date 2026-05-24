@@ -348,20 +348,56 @@ where
 
     emit(InstallEvent::log("Pre-check file diagnostics:"));
     for (index, check) in file_checks {
+        let expectation = if check.inverted {
+            "expected absent"
+        } else {
+            "expected present"
+        };
+
         match verifier.check_file_path(check) {
             Ok(path) => {
-                let metadata = fs::metadata(&path);
-                match metadata {
-                    Ok(metadata) => emit(InstallEvent::log(format!(
-                        "  [{}] {} exists, size {}",
-                        index + 1,
-                        path.display(),
-                        format_bytes(metadata.len())
-                    ))),
+                match fs::metadata(&path) {
+                    Ok(metadata) => {
+                        if check.inverted {
+                            emit(InstallEvent::log(format!(
+                                "  [{}] {} exists, size {} (expected absent; this check should fail)",
+                                index + 1,
+                                path.display(),
+                                format_bytes(metadata.len())
+                            )));
+                        } else {
+                            emit(InstallEvent::log(format!(
+                                "  [{}] {} exists, size {} ({}; this check should pass)",
+                                index + 1,
+                                path.display(),
+                                format_bytes(metadata.len()),
+                                expectation
+                            )));
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        if check.inverted {
+                            emit(InstallEvent::log(format!(
+                                "  [{}] {} absent ({}; this check should pass)",
+                                index + 1,
+                                path.display(),
+                                expectation
+                            )));
+                        } else {
+                            emit(InstallEvent::log(format!(
+                                "  [{}] {} missing ({}; this check should fail): {}",
+                                index + 1,
+                                path.display(),
+                                expectation,
+                                err
+                            )));
+                        }
+                    }
                     Err(err) => emit(InstallEvent::log(format!(
-                        "  [{}] {} missing/unreadable: {}",
+                        "  [{}] {} unreadable ({}): {}",
                         index + 1,
                         path.display(),
+                        expectation,
                         err
                     ))),
                 }
