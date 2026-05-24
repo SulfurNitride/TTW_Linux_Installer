@@ -1,7 +1,7 @@
 <img width="1860" height="1516" alt="image" src="https://github.com/user-attachments/assets/f3aa1651-b304-4def-acfb-495610765ba2" />
 
 
-A linux native installer for MPI packages (TTW, BSA Decompressors, so far only tested TTW and FNV/Oblivion Decompressor).
+A linux native installer for MPI packages (TTW, BSA Decompressors, so far only tested TTW and FNV/Oblivion Decompressor). As a note this will not line up with 17GBs output it should be around 18GBs.
 
 To run it all you need to do is either double click it and allow executing, or `chmod +x mpi_installer_gui`.
 
