@@ -13,5 +13,4 @@ fn archive_progress_style() -> ProgressStyle {
 }
 
 /// LZ4 frame magic number.
-#[cfg(not(feature = "dream-reader"))]
 const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];

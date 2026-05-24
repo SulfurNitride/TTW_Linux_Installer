@@ -1,10 +1,6 @@
 use anyhow::{Context, Result};
-#[cfg(not(feature = "dream-reader"))]
 use ba2::tes4::Archive;
-#[cfg(not(feature = "dream-reader"))]
 use ba2::{ByteSlice, Reader};
-#[cfg(feature = "dream-reader")]
-use dream_archive::bsa::tes4::Archive;
 use indicatif::ProgressBar;
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -13,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::archive_progress_style;
-#[cfg(not(feature = "dream-reader"))]
 use super::LZ4_FRAME_MAGIC;
 use crate::services::path_utils::safe_join;
 /// Extracts .mpi files (BSA archives) to a temporary directory
@@ -61,7 +56,6 @@ impl MpiExtractor {
         fs::create_dir_all(output_dir)?;
         let temp_dir = output_dir.to_path_buf();
 
-        #[cfg(not(feature = "dream-reader"))]
         {
             let (archive, options) =
                 Archive::read(mpi_path).context("Failed to open MPI archive")?;
@@ -152,74 +146,9 @@ impl MpiExtractor {
             }
         }
 
-        #[cfg(feature = "dream-reader")]
-        {
-            let archive = Archive::open_path(mpi_path).context("Failed to open MPI archive")?;
-            let mut entries = Vec::new();
-            for entry in archive.entries().iter() {
-                if let Some(path) = entry.path() {
-                    let relative_path = path.to_string().replace('\\', "/");
-                    let output_path = safe_join(&temp_dir, &relative_path)?;
-                    entries.push((output_path, entry.clone()));
-                }
-            }
-
-            let mut dirs_needed: HashSet<PathBuf> = HashSet::new();
-            for (output_path, _) in &entries {
-                if let Some(parent) = output_path.parent() {
-                    dirs_needed.insert(parent.to_path_buf());
-                }
-            }
-
-            let total_files = entries.len();
-            println!("Archive opened: {} files found", total_files);
-
-            for dir in &dirs_needed {
-                fs::create_dir_all(dir)?;
-            }
-
-            let pb = ProgressBar::new(total_files as u64);
-            pb.set_style(archive_progress_style());
-
-            let extracted = AtomicUsize::new(0);
-            let failed = AtomicUsize::new(0);
-
-            entries.par_iter().for_each(|(output_path, archive_entry)| {
-                let data = archive
-                    .read_entry(archive_entry)
-                    .map_err(|e| anyhow::anyhow!("{}", e));
-
-                match data {
-                    Ok(bytes) => {
-                        if fs::write(output_path, &bytes).is_ok() {
-                            extracted.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            failed.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    Err(_) => {
-                        failed.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-
-                pb.inc(1);
-            });
-
-            pb.finish_with_message("Extraction complete");
-
-            let extracted = extracted.load(Ordering::Relaxed);
-            let failed = failed.load(Ordering::Relaxed);
-
-            println!("\nMPI extraction complete: {} files extracted", extracted);
-            if failed > 0 {
-                println!("{} files failed to extract", failed);
-            }
-        }
-
         Ok(temp_dir)
     }
     /// Decompress LZ4 frame format data
-    #[cfg(not(feature = "dream-reader"))]
     pub(super) fn decompress_lz4_frame(compressed: &[u8]) -> Result<Vec<u8>> {
         use lz4_flex::frame::FrameDecoder;
         use std::io::Read;

@@ -1,10 +1,6 @@
 use anyhow::{Context, Result};
-#[cfg(not(feature = "dream-reader"))]
 use ba2::tes4::Archive;
-#[cfg(not(feature = "dream-reader"))]
 use ba2::{ByteSlice, Reader};
-#[cfg(feature = "dream-reader")]
-use dream_archive::bsa::tes4::Archive;
 use indicatif::ProgressBar;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -14,9 +10,7 @@ use std::sync::Mutex;
 use tracing::warn;
 
 use super::archive_progress_style;
-#[cfg(not(feature = "dream-reader"))]
 use super::extractor::MpiExtractor;
-#[cfg(not(feature = "dream-reader"))]
 use super::LZ4_FRAME_MAGIC;
 
 /// In-memory MPI package store.
@@ -42,7 +36,6 @@ impl MpiStore {
             mpi_path.file_name().unwrap_or_default().to_string_lossy()
         );
 
-        #[cfg(not(feature = "dream-reader"))]
         let (files, total_bytes, _total_files) = {
             let (archive, options) =
                 Archive::read(mpi_path).context("Failed to open MPI archive")?;
@@ -105,55 +98,6 @@ impl MpiStore {
                     }
                 }
 
-                pb.inc(1);
-            });
-
-            pb.finish_with_message("Loaded into memory");
-            (
-                files
-                    .into_inner()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
-                total_bytes.load(Ordering::Relaxed),
-                total_files,
-            )
-        };
-
-        #[cfg(feature = "dream-reader")]
-        let (files, total_bytes, _total_files) = {
-            let archive = Archive::open_path(mpi_path).context("Failed to open MPI archive")?;
-            let entries: Vec<_> = archive
-                .entries()
-                .iter()
-                .filter_map(|entry| {
-                    entry
-                        .path()
-                        .map(|path| (path.to_string().replace('\\', "/"), entry.clone()))
-                })
-                .collect();
-
-            let total_files = entries.len();
-            println!(
-                "  {} files in archive, decompressing with dream_archive...",
-                total_files
-            );
-
-            let pb = ProgressBar::new(total_files as u64);
-            pb.set_style(archive_progress_style());
-
-            let files: Mutex<HashMap<String, Vec<u8>>> =
-                Mutex::new(HashMap::with_capacity(total_files));
-            let total_bytes = AtomicUsize::new(0);
-
-            entries.par_iter().for_each(|(path, entry)| {
-                if let Ok(data) = archive.read_entry(entry) {
-                    match files.lock() {
-                        Ok(mut files) => {
-                            total_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                            files.insert(path.to_lowercase(), data);
-                        }
-                        Err(_) => warn!("MPI store lock poisoned while loading {}", path),
-                    }
-                }
                 pb.inc(1);
             });
 

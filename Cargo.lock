@@ -1066,26 +1066,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "dream-path"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a19898f64cdf9fab61a1fa0f839b1ce360bc6a858db67717ff57b3e653f5c877"
-dependencies = [
- "bstr",
-]
-
-[[package]]
-name = "dream_archive"
-version = "0.1.6"
-dependencies = [
- "dream-path",
- "encoding_rs",
- "flate2",
- "lz4_flex",
- "memmap2",
-]
-
-[[package]]
 name = "ecolor"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3943,7 +3923,6 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "dirs",
- "dream_archive",
  "eframe",
  "egui",
  "ffmpeg-next",

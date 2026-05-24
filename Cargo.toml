@@ -9,7 +9,6 @@ license = "GPL-3.0-only"
 [dependencies]
 # BSA handling
 ba2 = "3.0.1"
-dream_archive = { path = "/home/luke/Documents/dream_archive", optional = true }
 
 # Error handling
 anyhow = "1.0"
@@ -86,7 +85,6 @@ libc = "0.2"
 
 [features]
 default = []
-dream-reader = ["dep:dream_archive"]
 ffmpeg-audio = ["dep:ffmpeg-next"]
 
 [[bin]]

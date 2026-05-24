@@ -403,29 +403,12 @@ impl MpiInstallerApp {
                 self.apply_detected_games();
             }
 
-            #[cfg(feature = "dream-reader")]
-            {
-                let mut enabled = true;
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(&mut enabled, "dream_archive reader (experimental)"),
-                )
-                .on_hover_text(
-                    "This build was compiled with dream_archive support. Runtime switching needs a backend refactor.",
-                );
-            }
-
-            #[cfg(not(feature = "dream-reader"))]
-            {
-                let mut enabled = false;
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(&mut enabled, "dream_archive reader (experimental)"),
-                )
-                .on_hover_text(
-                    "Build with --features dream-reader to enable the experimental dream_archive backend.",
-                );
-            }
+            let mut enabled = false;
+            ui.add_enabled(
+                false,
+                egui::Checkbox::new(&mut enabled, "dream_archive reader (disabled)"),
+            )
+            .on_hover_text("dream_archive support is temporarily disabled for release builds.");
         });
 
         ui.add_space(10.0);

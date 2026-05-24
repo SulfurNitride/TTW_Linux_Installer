@@ -730,7 +730,6 @@ impl AssetProcessor {
                 path_to_assets.entry(normalized).or_default().push(asset);
             }
 
-            #[cfg(not(feature = "dream-reader"))]
             let (archive, compression_options) = {
                 use ba2::tes4::{
                     Archive as TesArchive, ArchiveOptions, FileCompressionOptions as FcOpts,
@@ -750,19 +749,6 @@ impl AssetProcessor {
                 (archive, FcOpts::from(&options))
             };
 
-            #[cfg(feature = "dream-reader")]
-            let archive = match dream_archive::bsa::tes4::Archive::open_path(bsa_path.as_path()) {
-                Ok(archive) => archive,
-                Err(e) => {
-                    warn!("Failed to open {}: {}", bsa_name, e);
-                    let missing_count = assets_for_bsa.len();
-                    failed.fetch_add(missing_count, Ordering::Relaxed);
-                    pb.inc(missing_count as u64);
-                    continue;
-                }
-            };
-
-            #[cfg(not(feature = "dream-reader"))]
             let matched = {
                 let mut matched: Vec<(Vec<&Asset>, &ba2::tes4::File<'_>)> = Vec::new();
                 use ba2::ByteSlice;
@@ -788,24 +774,6 @@ impl AssetProcessor {
                 matched
             };
 
-            #[cfg(feature = "dream-reader")]
-            let matched = {
-                let mut matched: Vec<(Vec<&Asset>, dream_archive::bsa::tes4::Entry)> = Vec::new();
-                for entry in archive.entries() {
-                    if path_to_assets.is_empty() {
-                        break;
-                    }
-                    let Some(path) = entry.path() else {
-                        continue;
-                    };
-                    let full_path = path.to_string().replace('/', "\\").to_lowercase();
-                    if let Some(assets_needing) = path_to_assets.remove(&full_path) {
-                        matched.push((assets_needing, entry.clone()));
-                    }
-                }
-                matched
-            };
-
             // Decompress + process in parallel, track readiness
             let success_ref = &success;
             let failed_ref = &failed;
@@ -818,7 +786,6 @@ impl AssetProcessor {
 
             matched.par_iter().for_each(|(assets_needing, file)| {
                 let decompress_start = Instant::now();
-                #[cfg(not(feature = "dream-reader"))]
                 let data = if file.is_decompressed() {
                     file.as_bytes().to_vec()
                 } else {
@@ -841,27 +808,6 @@ impl AssetProcessor {
                             }
                             return;
                         }
-                    }
-                };
-                #[cfg(feature = "dream-reader")]
-                let data = match archive.read_entry(file) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        for asset in assets_needing {
-                            failed_ref.fetch_add(1, Ordering::Relaxed);
-                            let error_msg = format!(
-                                "{} (op={}): decompression failed: {}",
-                                asset.source_path, asset.op_type, e
-                            );
-                            warn!("{}", error_msg);
-                            if let Ok(mut errs) = errors_ref.lock() {
-                                if errs.len() < 100 {
-                                    errs.push(error_msg);
-                                }
-                            }
-                            pb_ref.inc(1);
-                        }
-                        return;
                     }
                 };
                 timings_ref.record_decompress(decompress_start.elapsed().as_nanos() as u64);
@@ -1189,7 +1135,6 @@ impl AssetProcessor {
                 path_to_assets.entry(normalized).or_default().push(asset);
             }
 
-            #[cfg(not(feature = "dream-reader"))]
             let (archive, compression_options) = {
                 use ba2::tes4::{
                     Archive as TesArchive, ArchiveOptions, FileCompressionOptions as FcOpts,
@@ -1209,19 +1154,6 @@ impl AssetProcessor {
                 (archive, FcOpts::from(&options))
             };
 
-            #[cfg(feature = "dream-reader")]
-            let archive = match dream_archive::bsa::tes4::Archive::open_path(bsa_path.as_path()) {
-                Ok(archive) => archive,
-                Err(e) => {
-                    warn!("Failed to open {}: {}", bsa_name, e);
-                    let missing_count = assets_for_bsa.len();
-                    failed.fetch_add(missing_count, Ordering::Relaxed);
-                    processed.fetch_add(missing_count, Ordering::Relaxed);
-                    continue;
-                }
-            };
-
-            #[cfg(not(feature = "dream-reader"))]
             let matched = {
                 let mut matched: Vec<(Vec<&Asset>, &ba2::tes4::File<'_>)> = Vec::new();
                 use ba2::ByteSlice;
@@ -1247,24 +1179,6 @@ impl AssetProcessor {
                 matched
             };
 
-            #[cfg(feature = "dream-reader")]
-            let matched = {
-                let mut matched: Vec<(Vec<&Asset>, dream_archive::bsa::tes4::Entry)> = Vec::new();
-                for entry in archive.entries() {
-                    if path_to_assets.is_empty() {
-                        break;
-                    }
-                    let Some(path) = entry.path() else {
-                        continue;
-                    };
-                    let full_path = path.to_string().replace('/', "\\").to_lowercase();
-                    if let Some(assets_needing) = path_to_assets.remove(&full_path) {
-                        matched.push((assets_needing, entry.clone()));
-                    }
-                }
-                matched
-            };
-
             let success_ref = &success;
             let failed_ref = &failed;
             let errors_ref = &errors;
@@ -1275,7 +1189,6 @@ impl AssetProcessor {
             let ready_tx = &bsa_ready_tx;
 
             matched.par_iter().for_each(|(assets_needing, file)| {
-                #[cfg(not(feature = "dream-reader"))]
                 let data = if file.is_decompressed() {
                     file.as_bytes().to_vec()
                 } else {
@@ -1298,27 +1211,6 @@ impl AssetProcessor {
                             }
                             return;
                         }
-                    }
-                };
-                #[cfg(feature = "dream-reader")]
-                let data = match archive.read_entry(file) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        for asset in assets_needing {
-                            failed_ref.fetch_add(1, Ordering::Relaxed);
-                            let error_msg = format!(
-                                "{} (op={}): decompression failed: {}",
-                                asset.source_path, asset.op_type, e
-                            );
-                            warn!("{}", error_msg);
-                            if let Ok(mut errs) = errors_ref.lock() {
-                                if errs.len() < 100 {
-                                    errs.push(error_msg);
-                                }
-                            }
-                            processed_ref.fetch_add(1, Ordering::Relaxed);
-                        }
-                        return;
                     }
                 };
 
