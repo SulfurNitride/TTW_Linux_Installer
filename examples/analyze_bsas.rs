@@ -39,7 +39,10 @@ fn main() {
     ];
 
     println!("\n=== BSA File Analysis ===\n");
-    println!("{:<50} {:>8} {:>12} {:>12}", "BSA File", "Files", "On Disk", "Est. RAM");
+    println!(
+        "{:<50} {:>8} {:>12} {:>12}",
+        "BSA File", "Files", "On Disk", "Est. RAM"
+    );
     println!("{}", "-".repeat(85));
 
     let mut total_files = 0;

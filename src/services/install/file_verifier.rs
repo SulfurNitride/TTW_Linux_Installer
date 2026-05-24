@@ -1,10 +1,11 @@
-use anyhow::{Result, Context, bail};
-use sha1::{Sha1, Digest};
+use anyhow::{bail, Context, Result};
 use md5::Md5;
-use std::path::{Path, PathBuf};
+use sha1::{Digest, Sha1};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::models::Check;
+use crate::services::path_utils::safe_join;
 use crate::services::LocationResolver;
 
 /// Check types from MPI manifest
@@ -77,7 +78,10 @@ impl<'a> FileVerifier<'a> {
             return Ok(result);
         }
 
-        println!("\n=== Running {} Pre-Installation Checks ===\n", checks.len());
+        println!(
+            "\n=== Running {} Pre-Installation Checks ===\n",
+            checks.len()
+        );
 
         for (i, check) in checks.iter().enumerate() {
             let check_type = CheckType::from_i32(check.check_type);
@@ -85,7 +89,11 @@ impl<'a> FileVerifier<'a> {
             match check_type {
                 Some(CheckType::FileCheck) => {
                     // Type 0: File check - existence and optionally checksum
-                    if check.checksums.is_some() && !check.checksums.as_ref().unwrap().is_empty() {
+                    if check
+                        .checksums
+                        .as_ref()
+                        .is_some_and(|checksums| !checksums.is_empty())
+                    {
                         self.verify_file_checksum(i, check, &mut result);
                     } else {
                         self.verify_file_exists(i, check, &mut result);
@@ -98,7 +106,11 @@ impl<'a> FileVerifier<'a> {
                     self.verify_path_check(i, check, &mut result);
                 }
                 None => {
-                    println!("  [{}] SKIP: Unknown check type {}", i + 1, check.check_type);
+                    println!(
+                        "  [{}] SKIP: Unknown check type {}",
+                        i + 1,
+                        check.check_type
+                    );
                     result.skipped += 1;
                 }
             }
@@ -135,7 +147,11 @@ impl<'a> FileVerifier<'a> {
         let expected = !check.inverted; // inverted means file should NOT exist
 
         if exists == expected {
-            println!("  [{}] PASS: FileExists - {}", index + 1, file_path.display());
+            println!(
+                "  [{}] PASS: FileExists - {}",
+                index + 1,
+                file_path.display()
+            );
             result.passed += 1;
         } else {
             let msg = if check.inverted {
@@ -170,8 +186,11 @@ impl<'a> FileVerifier<'a> {
         let expected_checksums = match &check.checksums {
             Some(c) if !c.is_empty() => c,
             _ => {
-                println!("  [{}] SKIP: Checksum - No checksum specified for {}",
-                    index + 1, file_path.display());
+                println!(
+                    "  [{}] SKIP: Checksum - No checksum specified for {}",
+                    index + 1,
+                    file_path.display()
+                );
                 result.skipped += 1;
                 return;
             }
@@ -208,23 +227,25 @@ impl<'a> FileVerifier<'a> {
 
         let (actual_hash, matches) = if valid_hashes.iter().any(|h| h.len() == 32) {
             // Expected hash is MD5 (32 chars)
-            let matches = valid_hashes.iter().any(|expected| {
-                expected.eq_ignore_ascii_case(&md5_hash)
-            });
+            let matches = valid_hashes
+                .iter()
+                .any(|expected| expected.eq_ignore_ascii_case(&md5_hash));
             (md5_hash, matches)
         } else {
             // Default to SHA1 (40 chars)
-            let matches = valid_hashes.iter().any(|expected| {
-                expected.eq_ignore_ascii_case(&sha1_hash)
-            });
+            let matches = valid_hashes
+                .iter()
+                .any(|expected| expected.eq_ignore_ascii_case(&sha1_hash));
             (sha1_hash, matches)
         };
 
         if matches != check.inverted {
-            println!("  [{}] PASS: Checksum - {} ({})",
+            println!(
+                "  [{}] PASS: Checksum - {} ({})",
                 index + 1,
                 file_path.file_name().unwrap_or_default().to_string_lossy(),
-                &actual_hash[..8]);
+                &actual_hash[..8]
+            );
             result.passed += 1;
         } else {
             let msg = format!(
@@ -255,7 +276,10 @@ impl<'a> FileVerifier<'a> {
         let required_mb = check.free_size.unwrap_or(0);
 
         if required_mb <= 0 {
-            println!("  [{}] SKIP: FreeSpace - No size requirement specified", index + 1);
+            println!(
+                "  [{}] SKIP: FreeSpace - No size requirement specified",
+                index + 1
+            );
             result.skipped += 1;
             return;
         }
@@ -265,9 +289,15 @@ impl<'a> FileVerifier<'a> {
         let path = match self.resolver.resolve_path(check.loc) {
             Ok(p) => p,
             Err(e) => {
-                println!("  [{}] FAIL: FreeSpace - Cannot resolve location: {}", index + 1, e);
+                println!(
+                    "  [{}] FAIL: FreeSpace - Cannot resolve location: {}",
+                    index + 1,
+                    e
+                );
                 result.failed += 1;
-                result.errors.push(format!("FreeSpace: Cannot resolve location {}", check.loc));
+                result
+                    .errors
+                    .push(format!("FreeSpace: Cannot resolve location {}", check.loc));
                 return;
             }
         };
@@ -279,16 +309,25 @@ impl<'a> FileVerifier<'a> {
                 let available_gb = available as f64 / 1_073_741_824.0;
 
                 if available >= required_bytes {
-                    println!("  [{}] PASS: FreeSpace - {:.2} GB available (need {:.2} GB)",
-                        index + 1, available_gb, required_gb);
+                    println!(
+                        "  [{}] PASS: FreeSpace - {:.2} GB available (need {:.2} GB)",
+                        index + 1,
+                        available_gb,
+                        required_gb
+                    );
                     result.passed += 1;
                 } else {
                     let msg = if let Some(custom_msg) = &check.custom_message {
-                        format!("{} ({:.2} GB available, {:.2} GB required)", custom_msg, available_gb, required_gb)
+                        format!(
+                            "{} ({:.2} GB available, {:.2} GB required)",
+                            custom_msg, available_gb, required_gb
+                        )
                     } else {
                         format!(
                             "Insufficient space at {}: {:.2} GB available, {:.2} GB required",
-                            path.display(), available_gb, required_gb
+                            path.display(),
+                            available_gb,
+                            required_gb
                         )
                     };
                     println!("  [{}] FAIL: {}", index + 1, msg);
@@ -308,9 +347,15 @@ impl<'a> FileVerifier<'a> {
         let path = match self.resolver.resolve_path(check.loc) {
             Ok(p) => p,
             Err(e) => {
-                println!("  [{}] FAIL: PathCheck - Cannot resolve location: {}", index + 1, e);
+                println!(
+                    "  [{}] FAIL: PathCheck - Cannot resolve location: {}",
+                    index + 1,
+                    e
+                );
                 result.failed += 1;
-                result.errors.push(format!("PathCheck: Cannot resolve location {}", check.loc));
+                result
+                    .errors
+                    .push(format!("PathCheck: Cannot resolve location {}", check.loc));
                 return;
             }
         };
@@ -326,7 +371,11 @@ impl<'a> FileVerifier<'a> {
 
         if is_problematic == check.inverted {
             // If inverted and problematic, or not inverted and not problematic = PASS
-            println!("  [{}] PASS: PathCheck - {} is valid", index + 1, path.display());
+            println!(
+                "  [{}] PASS: PathCheck - {} is valid",
+                index + 1,
+                path.display()
+            );
             result.passed += 1;
         } else {
             let msg = if let Some(custom_msg) = &check.custom_message {
@@ -342,16 +391,20 @@ impl<'a> FileVerifier<'a> {
 
     /// Resolve the file path for a check
     fn resolve_check_path(&self, check: &Check) -> Result<PathBuf> {
-        let base_path = self.resolver.resolve_path(check.loc)
+        let base_path = self
+            .resolver
+            .resolve_path(check.loc)
             .context("Cannot resolve location")?;
 
-        let file_name = check.file.as_deref()
+        let file_name = check
+            .file
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("No file specified in check"))?;
 
         // Normalize path separators
         let normalized = file_name.replace('\\', "/");
 
-        Ok(base_path.join(normalized))
+        safe_join(&base_path, &normalized)
     }
 }
 
@@ -373,8 +426,8 @@ pub fn compute_md5(data: &[u8]) -> String {
 
 /// Compute SHA1 hash of a file
 pub fn compute_file_sha1(path: &Path) -> Result<String> {
-    let data = fs::read(path)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+    let data =
+        fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))?;
     Ok(compute_sha1(&data))
 }
 

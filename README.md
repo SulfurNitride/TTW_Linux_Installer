@@ -37,8 +37,14 @@ cargo build --release
 ## CLI Usage
 
 ```bash
+# Auto-detect supported game installs
+./mpi_installer detect
+
 # Install TTW
 ./mpi_installer install --mpi /path/to/TTW.mpi --fo3 /path/to/Fallout3 --fnv /path/to/FalloutNV --dest /path/to/output
+
+# Game paths can also be omitted and auto-detected on Linux when possible
+./mpi_installer install --mpi /path/to/TTW.mpi --dest /path/to/output
 
 # Install Oblivion Decompressor
 ./mpi_installer install --mpi /path/to/OblDecomp.mpi --oblivion /path/to/Oblivion --dest /path/to/output

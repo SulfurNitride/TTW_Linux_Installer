@@ -1,6 +1,6 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, bail};
 
 /// Installation configuration and paths
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -55,7 +55,10 @@ impl InstallConfig {
         if !self.falloutnv_root.is_empty() {
             let root = Path::new(&self.falloutnv_root);
             if !root.exists() {
-                bail!("Fallout New Vegas directory not found: {}", self.falloutnv_root);
+                bail!(
+                    "Fallout New Vegas directory not found: {}",
+                    self.falloutnv_root
+                );
             }
             if !root.join("FalloutNV.exe").exists() && !root.join("FalloutNV").exists() {
                 bail!("FalloutNV.exe not found in: {}", self.falloutnv_root);
@@ -85,7 +88,10 @@ impl InstallConfig {
 
         let mpi_path = Path::new(&self.mpi_package_path);
         let is_mpi_file = mpi_path.is_file()
-            && mpi_path.extension().map(|e| e.eq_ignore_ascii_case("mpi")).unwrap_or(false);
+            && mpi_path
+                .extension()
+                .map(|e| e.eq_ignore_ascii_case("mpi"))
+                .unwrap_or(false);
         let is_directory = mpi_path.is_dir();
 
         if !is_mpi_file && !is_directory {

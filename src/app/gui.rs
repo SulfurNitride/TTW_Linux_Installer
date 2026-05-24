@@ -7,13 +7,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
 
 use ttw_installer::{
-    models::InstallConfig,
-    services::{
-        AssetProcessor, FileVerifier, LocationResolver, ManifestLoader, MpiExtractor, XdeltaManager,
-    },
+    app::{run_install as run_shared_install, InstallEvent, InstallRequest},
+    services::{DetectedGame, GameDetection, Logger},
 };
 
 /// User configuration that persists between sessions
@@ -69,28 +66,33 @@ impl UserConfig {
     }
 }
 
-/// Get log file path (stores next to executable for easy access)
-fn get_log_path(package_name: &str) -> PathBuf {
-    // Store logs next to the executable for easy user access
-    let logs_dir = std::env::current_exe()
-        .map(|p| p.parent().unwrap_or(std::path::Path::new(".")).join("logs"))
-        .unwrap_or_else(|_| PathBuf::from("logs"));
+#[derive(Clone)]
+struct GuiLogger {
+    messages: Arc<Mutex<Vec<String>>>,
+    file: Arc<Mutex<Option<fs::File>>>,
+}
 
-    let _ = fs::create_dir_all(&logs_dir);
+impl GuiLogger {
+    fn new(messages: Arc<Mutex<Vec<String>>>, log_path: &PathBuf) -> Self {
+        Self {
+            messages,
+            file: Arc::new(Mutex::new(fs::File::create(log_path).ok())),
+        }
+    }
 
-    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
-    let safe_name: String = package_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
+    fn log(&self, msg: impl AsRef<str>) {
+        let msg = msg.as_ref();
+        if let Ok(mut logs) = self.messages.lock() {
+            logs.push(msg.to_string());
+        }
+
+        if let Ok(mut file_guard) = self.file.lock() {
+            if let Some(ref mut file) = *file_guard {
+                let timestamp = Local::now().format("%H:%M:%S");
+                let _ = writeln!(file, "[{}] {}", timestamp, msg);
             }
-        })
-        .collect();
-
-    logs_dir.join(format!("{}_{}.log", timestamp, safe_name))
+        }
+    }
 }
 
 fn main() -> eframe::Result<()> {
@@ -171,7 +173,9 @@ struct MpiInstallerApp {
 impl Default for MpiInstallerApp {
     fn default() -> Self {
         // Load saved config
-        let config = UserConfig::load();
+        let mut config = UserConfig::load();
+        let detected = GameDetection::detect();
+        fill_missing_config_paths(&mut config, &detected);
 
         Self {
             fo3_path: config.fo3_path.clone(),
@@ -240,10 +244,8 @@ impl eframe::App for MpiInstallerApp {
 
                     // Progress bar (shared)
                     ui.horizontal(|ui| {
-                        let progress_value =
-                            self.progress.load(Ordering::Relaxed) as f32 / 10000.0;
-                        let progress_bar =
-                            egui::ProgressBar::new(progress_value).show_percentage();
+                        let progress_value = self.progress.load(Ordering::Relaxed) as f32 / 10000.0;
+                        let progress_bar = egui::ProgressBar::new(progress_value).show_percentage();
                         let avail = (ui.available_width() - 80.0).max(120.0);
                         ui.add_sized([avail, 20.0], progress_bar);
 
@@ -264,9 +266,10 @@ impl eframe::App for MpiInstallerApp {
                             .max_height(log_height)
                             .stick_to_bottom(true)
                             .show(ui, |ui| {
-                                let logs = self.log_messages.lock().unwrap();
-                                for msg in logs.iter() {
-                                    ui.label(msg);
+                                if let Ok(logs) = self.log_messages.lock() {
+                                    for msg in logs.iter() {
+                                        ui.label(msg);
+                                    }
                                 }
                             });
                     });
@@ -282,11 +285,12 @@ impl eframe::App for MpiInstallerApp {
 
 impl MpiInstallerApp {
     fn add_log(&self, msg: &str) {
-        let mut logs = self.log_messages.lock().unwrap();
-        logs.push(msg.to_string());
-        // Keep last 100 messages
-        if logs.len() > 100 {
-            logs.remove(0);
+        if let Ok(mut logs) = self.log_messages.lock() {
+            logs.push(msg.to_string());
+            // Keep last 100 messages
+            if logs.len() > 100 {
+                logs.remove(0);
+            }
         }
     }
 
@@ -388,6 +392,44 @@ impl MpiInstallerApp {
 
         ui.add_space(10.0);
 
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.status != InstallStatus::Running,
+                    egui::Button::new("Auto-detect games"),
+                )
+                .clicked()
+            {
+                self.apply_detected_games();
+            }
+
+            #[cfg(feature = "dream-reader")]
+            {
+                let mut enabled = true;
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut enabled, "dream_archive reader (experimental)"),
+                )
+                .on_hover_text(
+                    "This build was compiled with dream_archive support. Runtime switching needs a backend refactor.",
+                );
+            }
+
+            #[cfg(not(feature = "dream-reader"))]
+            {
+                let mut enabled = false;
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut enabled, "dream_archive reader (experimental)"),
+                )
+                .on_hover_text(
+                    "Build with --features dream-reader to enable the experimental dream_archive backend.",
+                );
+            }
+        });
+
+        ui.add_space(10.0);
+
         // Start Installation button
         let can_install = self.status != InstallStatus::Running
             && !self.mpi_path.is_empty()
@@ -408,9 +450,10 @@ impl MpiInstallerApp {
 
         // Clear logs
         {
-            let mut logs = self.log_messages.lock().unwrap();
-            logs.clear();
-            logs.push("Starting installation...".to_string());
+            if let Ok(mut logs) = self.log_messages.lock() {
+                logs.clear();
+                logs.push("Starting installation...".to_string());
+            }
         }
 
         // Clone values for the thread
@@ -448,6 +491,55 @@ impl MpiInstallerApp {
 
         self.install_thread = Some(handle);
     }
+
+    fn apply_detected_games(&mut self) {
+        let detected = GameDetection::detect();
+        let mut applied = 0usize;
+
+        if self.fo3_path.trim().is_empty() {
+            if let Some(path) = detected_path_string(detected.fallout3.as_ref()) {
+                self.fo3_path = path;
+                applied += 1;
+            }
+        }
+        if self.fnv_path.trim().is_empty() {
+            if let Some(path) = detected_path_string(detected.falloutnv.as_ref()) {
+                self.fnv_path = path;
+                applied += 1;
+            }
+        }
+        if self.oblivion_path.trim().is_empty() {
+            if let Some(path) = detected_path_string(detected.oblivion.as_ref()) {
+                self.oblivion_path = path;
+                applied += 1;
+            }
+        }
+
+        self.save_config();
+        self.add_log(&format!("Auto-detected {} missing game path(s)", applied));
+    }
+}
+
+fn fill_missing_config_paths(config: &mut UserConfig, detected: &GameDetection) {
+    if config.fo3_path.trim().is_empty() {
+        if let Some(path) = detected_path_string(detected.fallout3.as_ref()) {
+            config.fo3_path = path;
+        }
+    }
+    if config.fnv_path.trim().is_empty() {
+        if let Some(path) = detected_path_string(detected.falloutnv.as_ref()) {
+            config.fnv_path = path;
+        }
+    }
+    if config.oblivion_path.trim().is_empty() {
+        if let Some(path) = detected_path_string(detected.oblivion.as_ref()) {
+            config.oblivion_path = path;
+        }
+    }
+}
+
+fn detected_path_string(game: Option<&DetectedGame>) -> Option<String> {
+    game.map(|game| game.path.to_string_lossy().to_string())
 }
 
 fn pick_folder() -> Option<String> {
@@ -473,328 +565,36 @@ fn run_installation(
     log_messages: Arc<Mutex<Vec<String>>>,
     progress: Arc<AtomicU32>,
 ) -> Result<(), String> {
-    let install_start = Instant::now();
+    let log_path = Logger::log_path_for("Installation")
+        .map_err(|e| format!("Failed to create log path: {}", e))?;
+    let ui_log = GuiLogger::new(log_messages, &log_path);
+    ui_log.log(format!("Log file: {}", log_path.display()));
 
-    // Create log file
-    let log_path = get_log_path("Installation");
-    let log_file = Arc::new(Mutex::new(fs::File::create(&log_path).ok()));
-
-    // Helper to log messages to both UI and file
-    let log_messages_clone = Arc::clone(&log_messages);
-    let log_file_clone = Arc::clone(&log_file);
-    let log = move |msg: &str| {
-        // Add to UI
-        if let Ok(mut logs) = log_messages_clone.lock() {
-            logs.push(msg.to_string());
-        }
-
-        // Write to file
-        if let Ok(mut file_guard) = log_file_clone.lock() {
-            if let Some(ref mut file) = *file_guard {
-                let timestamp = Local::now().format("%H:%M:%S");
-                let _ = writeln!(file, "[{}] {}", timestamp, msg);
+    let report = run_shared_install(
+        InstallRequest {
+            mpi_path,
+            fallout3_path: fo3_path,
+            falloutnv_path: fnv_path,
+            oblivion_path,
+            destination_path: output_path,
+            dry_run: false,
+        },
+        |event| match event {
+            InstallEvent::Log(message) => ui_log.log(message),
+            InstallEvent::Progress { current, .. } => {
+                progress.store(current.min(10_000), Ordering::Relaxed);
             }
-        }
-    };
-
-    log(&format!("Log file: {}", log_path.display()));
-
-    // Phase 1: Extract MPI (0-5%)
-    progress.store(0, Ordering::Relaxed);
-    let (mpi_dir, cleanup_needed) = if MpiExtractor::is_mpi_file(&mpi_path) {
-        log("Extracting MPI package...");
-        let extract_dir = output_path.join(".mpi_package");
-        let extracted = MpiExtractor::extract_to(&mpi_path, &extract_dir)
-            .map_err(|e| format!("Failed to extract MPI: {}", e))?;
-        (extracted, true)
-    } else if mpi_path.is_dir() {
-        (mpi_path.clone(), false)
-    } else {
-        return Err(format!("Invalid MPI path: {}", mpi_path.display()));
-    };
-    progress.store(500, Ordering::Relaxed); // 5%
-
-    // Phase 2: Load manifest (5-10%)
-    let manifest_path =
-        find_manifest(&mpi_dir).map_err(|e| format!("Failed to find manifest: {}", e))?;
-    log(&format!("Loading manifest: {}", manifest_path.display()));
-
-    let manifest = ManifestLoader::load_from_file(&manifest_path)
-        .map_err(|e| format!("Failed to load manifest: {}", e))?;
-
-    if let Some(pkg) = &manifest.package {
-        log(&format!(
-            "Package: {} v{}",
-            pkg.title.as_deref().unwrap_or("Unknown"),
-            pkg.version.as_deref().unwrap_or("?")
-        ));
-    }
-
-    let assets = ManifestLoader::parse_assets(&manifest)
-        .map_err(|e| format!("Failed to parse assets: {}", e))?;
-    let total_assets = assets.len();
-    log(&format!("Parsed {} assets", total_assets));
-
-    // Select best profile (avoids profiles with hardcoded Windows paths)
-    let profile_index = ManifestLoader::select_best_profile(&manifest);
-    log(&format!("Using profile {}", profile_index));
-
-    let locations = ManifestLoader::get_locations(&manifest, profile_index)
-        .map_err(|e| format!("Failed to get locations: {}", e))?;
-
-    let bsa_targets = ManifestLoader::get_bsa_target_locations(&manifest)
-        .map_err(|e| format!("Failed to get BSA targets: {}", e))?;
-    let total_bsas = bsa_targets.len();
-    log(&format!("Found {} BSA targets", total_bsas));
-
-    let variables = ManifestLoader::get_variables(&manifest, profile_index)
-        .or_else(|_| ManifestLoader::get_variables(&manifest, 0))
-        .unwrap_or_default();
-    progress.store(1000, Ordering::Relaxed); // 10%
-
-    // Create config and resolver
-    let config = InstallConfig {
-        fallout3_root: fo3_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        falloutnv_root: fnv_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        oblivion_root: oblivion_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        destination_path: output_path.to_string_lossy().to_string(),
-        mpi_package_path: mpi_dir.to_string_lossy().to_string(),
-    };
-
-    let resolver = LocationResolver::new(locations.clone(), config).with_variables(&variables);
-
-    // Run pre-installation checks (hash verification, file existence, etc.)
-    let checks = ManifestLoader::get_checks(&manifest);
-    if !checks.is_empty() {
-        log(&format!(
-            "Running {} pre-installation checks...",
-            checks.len()
-        ));
-        let verifier = FileVerifier::new(&resolver);
-        let verification_result = verifier
-            .run_checks(&checks)
-            .map_err(|e| format!("Verification error: {}", e))?;
-
-        if !verification_result.is_success() {
-            for err in &verification_result.errors {
-                log(&format!("CHECK FAILED: {}", err));
-            }
-            return Err(format!(
-                "Verification failed: {} checks failed. Please ensure you have valid, unmodified game files.",
-                verification_result.failed
-            ));
-        }
-        log(&format!("All {} checks passed", verification_result.passed));
-    }
-    progress.store(1200, Ordering::Relaxed); // 12%
-
-    log("Checking xdelta3...");
-    let xdelta = XdeltaManager::ensure_available(output_path.clone())
-        .map_err(|e| format!("Failed to get xdelta3: {}", e))?;
-
-    let processor = AssetProcessor::new(
-        resolver,
-        xdelta,
-        mpi_dir.clone(),
-        output_path.clone(),
-        &locations,
-        &bsa_targets,
+        },
     )
-    .map_err(|e| format!("Failed to create asset processor: {}", e))?;
+    .map_err(|e| e.to_string())?;
 
-    std::fs::create_dir_all(&output_path)
-        .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-    // Phase 3: Process assets (10-80%) - Streaming mode for minimal RAM usage
-    log("Processing assets (streaming mode)...");
-    let progress_clone = Arc::clone(&progress);
-    let log_messages_clone2 = Arc::clone(&log_messages);
-    let log_file_clone2 = Arc::clone(&log_file);
-
-    let stats = processor
-        .process_assets_streaming_with_callback(&assets, move |current, total, msg| {
-            // Update progress: 10% + (current/total * 70%)
-            let pct = 1000 + ((current as u32 * 7000) / total as u32);
-            progress_clone.store(pct, Ordering::Relaxed);
-
-            // Log progress periodically
-            if current % 1000 == 0 || current == total {
-                if let Ok(mut logs) = log_messages_clone2.lock() {
-                    logs.push(format!("Assets: {}/{} - {}", current, total, msg));
-                }
-                if let Ok(mut file_guard) = log_file_clone2.lock() {
-                    if let Some(ref mut file) = *file_guard {
-                        let timestamp = Local::now().format("%H:%M:%S");
-                        let _ = writeln!(
-                            file,
-                            "[{}] Assets: {}/{} - {}",
-                            timestamp, current, total, msg
-                        );
-                    }
-                }
-            }
-        })
-        .map_err(|e| format!("Failed to process assets: {}", e))?;
-
-    log(&format!(
-        "Processed: {} success, {} failed",
-        stats.success, stats.failed
-    ));
-
-    // Log full error list for diagnostics
-    if !stats.errors.is_empty() {
-        for err in &stats.errors {
-            log(&format!("  Error: {}", err));
-        }
-    }
-    progress.store(8000, Ordering::Relaxed); // 80%
-
-    // Phase 4: Write BSA archives (80-95%)
-    log("Writing BSA archives...");
-    let progress_clone = Arc::clone(&progress);
-    let log_messages_clone3 = Arc::clone(&log_messages);
-    let log_file_clone3 = Arc::clone(&log_file);
-
-    let (bsa_success, bsa_fail) = processor
-        .finalize_bsas_with_callback(move |current, total, bsa_name| {
-            // Update progress: 80% + (current/total * 15%)
-            let pct = 8000 + ((current as u32 * 1500) / total as u32);
-            progress_clone.store(pct, Ordering::Relaxed);
-
-            // Log each BSA
-            if let Ok(mut logs) = log_messages_clone3.lock() {
-                logs.push(format!("Writing BSA {}/{}: {}", current, total, bsa_name));
-            }
-            if let Ok(mut file_guard) = log_file_clone3.lock() {
-                if let Some(ref mut file) = *file_guard {
-                    let timestamp = Local::now().format("%H:%M:%S");
-                    let _ = writeln!(
-                        file,
-                        "[{}] Writing BSA {}/{}: {}",
-                        timestamp, current, total, bsa_name
-                    );
-                }
-            }
-        })
-        .map_err(|e| format!("Failed to write BSAs: {}", e))?;
-
-    log(&format!(
-        "BSA archives: {} created, {} failed",
-        bsa_success, bsa_fail
-    ));
-    progress.store(9000, Ordering::Relaxed); // 90%
-
-    // Phase 5: Post-installation commands (90-95%)
-    let mut post_fail = 0usize;
-    let post_commands = ManifestLoader::get_post_commands(&manifest);
-    if !post_commands.is_empty() {
-        log("Executing post-installation commands...");
-        let (post_success, post_fail_count) =
-            ManifestLoader::execute_post_commands(&post_commands, &output_path.to_string_lossy())
-                .map_err(|e| format!("Failed to execute post-commands: {}", e))?;
-        post_fail = post_fail_count;
-        log(&format!(
-            "Post-commands: {} success, {} failed",
-            post_success, post_fail
-        ));
-    }
-    progress.store(9500, Ordering::Relaxed); // 95%
-
-    let missing_patch_errors = stats
-        .errors
-        .iter()
-        .filter(|e| e.contains("Patch file not found"))
-        .count();
-
-    let mut failure_reasons: Vec<String> = Vec::new();
-    if stats.failed > 0 {
-        failure_reasons.push(format!("{} asset operations failed", stats.failed));
-    }
-    if bsa_fail > 0 {
-        failure_reasons.push(format!("{} BSA archives failed to write", bsa_fail));
-    }
-    if post_fail > 0 {
-        failure_reasons.push(format!("{} post-install commands failed", post_fail));
-    }
-
-    let failure_message = if failure_reasons.is_empty() {
-        None
-    } else if missing_patch_errors > 0 {
-        Some(format!(
-            "{}. Detected {} missing patch files (.xd3). This usually means the extracted MPI package is incomplete or mismatched for this manifest.",
-            failure_reasons.join("; "),
-            missing_patch_errors
-        ))
-    } else {
-        Some(failure_reasons.join("; "))
-    };
-
-    // Phase 6: Cleanup (95-100%)
-    if cleanup_needed {
-        log("Cleaning up...");
-        let _ = MpiExtractor::cleanup_temp(&mpi_dir);
-    }
-
-    if let Some(message) = failure_message {
-        return Err(format!("Installation failed: {}", message));
-    }
-
-    progress.store(10000, Ordering::Relaxed); // 100%
-
-    let elapsed = install_start.elapsed();
+    let elapsed = report.elapsed;
     let minutes = elapsed.as_secs() / 60;
     let seconds = elapsed.as_secs() % 60;
-    log(&format!(
+    ui_log.log(format!(
         "Installation complete! Total time: {}m {}s",
         minutes, seconds
     ));
 
     Ok(())
-}
-
-fn find_manifest(mpi_dir: &PathBuf) -> Result<PathBuf, String> {
-    let candidates = [
-        "_package/index.json",
-        "manifest.json",
-        "Manifest.json",
-        "TTW.manifest.json",
-        "ttw.manifest.json",
-        "index.json",
-    ];
-
-    for name in candidates {
-        let path = mpi_dir.join(name);
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    // Search recursively
-    for entry in walkdir::WalkDir::new(mpi_dir)
-        .max_depth(3)
-        .into_iter()
-        .flatten()
-    {
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        if (name.contains("manifest") || name == "index.json")
-            && entry
-                .path()
-                .extension()
-                .map(|e| e == "json")
-                .unwrap_or(false)
-        {
-            return Ok(entry.path().to_path_buf());
-        }
-    }
-
-    Err(format!("Manifest not found in: {}", mpi_dir.display()))
 }

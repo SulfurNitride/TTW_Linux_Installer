@@ -1,8 +1,8 @@
-use anyhow::{Result, bail};
+use crate::models::{InstallConfig, Location, Variable};
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::warn;
-use crate::models::{Location, InstallConfig, Variable};
 
 /// Resolves location indices to actual file paths
 pub struct LocationResolver {
@@ -45,7 +45,8 @@ impl LocationResolver {
         // Second pass: resolve variable references within variables
         // (e.g., %TES4DATA% = %TES4ROOT%\Data)
         let var_names: Vec<String> = self.variables.keys().cloned().collect();
-        for _ in 0..5 {  // Max 5 iterations to resolve nested refs
+        for _ in 0..5 {
+            // Max 5 iterations to resolve nested refs
             let mut changed = false;
             for name in &var_names {
                 if let Some(value) = self.variables.get(name).cloned() {
@@ -87,8 +88,11 @@ impl LocationResolver {
     pub fn resolve_path(&self, location_index: i32) -> Result<PathBuf> {
         let idx = location_index as usize;
         if idx >= self.locations.len() {
-            bail!("Location index {} is out of range (0-{})",
-                location_index, self.locations.len().saturating_sub(1));
+            bail!(
+                "Location index {} is out of range (0-{})",
+                location_index,
+                self.locations.len().saturating_sub(1)
+            );
         }
 
         let location = &self.locations[idx];
@@ -138,7 +142,8 @@ impl LocationResolver {
         } else if location.is_bsa_creation() {
             // Return the directory containing the BSA
             let bsa_path = self.resolve_path(location_index)?;
-            bsa_path.parent()
+            bsa_path
+                .parent()
                 .map(|p| p.to_path_buf())
                 .ok_or_else(|| anyhow::anyhow!("Invalid BSA path"))
         } else {
@@ -163,26 +168,38 @@ impl LocationResolver {
         // Fallout 3
         if !self.config.fallout3_root.is_empty() {
             resolved = resolved.replace("%FO3ROOT%", &self.config.fallout3_root);
-            resolved = resolved.replace("%FO3DATA%", &self.config.fallout3_data().to_string_lossy());
+            resolved =
+                resolved.replace("%FO3DATA%", &self.config.fallout3_data().to_string_lossy());
             // Also handle alternative naming conventions
             resolved = resolved.replace("%FALLOUT3ROOT%", &self.config.fallout3_root);
-            resolved = resolved.replace("%FALLOUT3DATA%", &self.config.fallout3_data().to_string_lossy());
+            resolved = resolved.replace(
+                "%FALLOUT3DATA%",
+                &self.config.fallout3_data().to_string_lossy(),
+            );
         }
 
         // Fallout New Vegas
         if !self.config.falloutnv_root.is_empty() {
             resolved = resolved.replace("%FNVROOT%", &self.config.falloutnv_root);
-            resolved = resolved.replace("%FNVDATA%", &self.config.falloutnv_data().to_string_lossy());
+            resolved =
+                resolved.replace("%FNVDATA%", &self.config.falloutnv_data().to_string_lossy());
             resolved = resolved.replace("%FALLOUTNVROOT%", &self.config.falloutnv_root);
-            resolved = resolved.replace("%FALLOUTNVDATA%", &self.config.falloutnv_data().to_string_lossy());
+            resolved = resolved.replace(
+                "%FALLOUTNVDATA%",
+                &self.config.falloutnv_data().to_string_lossy(),
+            );
         }
 
         // Oblivion (TES4)
         if !self.config.oblivion_root.is_empty() {
             resolved = resolved.replace("%TES4ROOT%", &self.config.oblivion_root);
-            resolved = resolved.replace("%TES4DATA%", &self.config.oblivion_data().to_string_lossy());
+            resolved =
+                resolved.replace("%TES4DATA%", &self.config.oblivion_data().to_string_lossy());
             resolved = resolved.replace("%OBLIVIONROOT%", &self.config.oblivion_root);
-            resolved = resolved.replace("%OBLIVIONDATA%", &self.config.oblivion_data().to_string_lossy());
+            resolved = resolved.replace(
+                "%OBLIVIONDATA%",
+                &self.config.oblivion_data().to_string_lossy(),
+            );
         }
 
         // Destination is always needed
@@ -224,11 +241,13 @@ impl LocationResolver {
                 _ => "Unknown",
             };
             let resolved = self.resolve_path(i as i32).unwrap_or_default();
-            println!("  [{}] {} ({}): {}",
+            println!(
+                "  [{}] {} ({}): {}",
                 i,
                 loc.name.as_deref().unwrap_or("?"),
                 type_name,
-                resolved.display());
+                resolved.display()
+            );
         }
     }
 }

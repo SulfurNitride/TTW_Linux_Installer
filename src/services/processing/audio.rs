@@ -1,17 +1,22 @@
-use anyhow::{Result, Context, bail};
-use std::path::Path;
 use std::fs::File;
+use std::io::Write;
 use std::num::NonZero;
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use anyhow::{bail, Context, Result};
+use hound::{SampleFormat, WavSpec, WavWriter};
+use mp3lame_encoder::{Builder, DualPcm, FlushNoGap, InterleavedPcm};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use symphonia::core::audio::AudioBufferRef;
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_VORBIS};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use hound::{WavWriter, WavSpec, SampleFormat};
-use vorbis_rs::{VorbisEncoderBuilder, VorbisBitrateManagementStrategy};
-use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm, DualPcm};
+use vorbis_rs::{VorbisBitrateManagementStrategy, VorbisEncoderBuilder};
 
 /// Audio processing service for decoding, resampling, and encoding audio files
 pub struct AudioProcessor {
@@ -79,15 +84,14 @@ impl AudioProcessor {
             .context("Failed to probe audio format")?;
 
         let mut format = probed.format;
-        let track = format.default_track()
-            .context("No audio tracks found")?;
+        let track = format.default_track().context("No audio tracks found")?;
 
         let track_id = track.id;
         let codec_params = track.codec_params.clone();
 
-        let sample_rate = codec_params.sample_rate
-            .context("Unknown sample rate")?;
-        let channels = codec_params.channels
+        let sample_rate = codec_params.sample_rate.context("Unknown sample rate")?;
+        let channels = codec_params
+            .channels
             .context("Unknown channel count")?
             .count();
 
@@ -102,7 +106,10 @@ impl AudioProcessor {
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(symphonia::core::errors::Error::IoError(e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break
+                }
                 Err(e) => return Err(e.into()),
             };
 
@@ -139,15 +146,14 @@ impl AudioProcessor {
             .context("Failed to probe audio format")?;
 
         let mut format = probed.format;
-        let track = format.default_track()
-            .context("No audio tracks found")?;
+        let track = format.default_track().context("No audio tracks found")?;
 
         let track_id = track.id;
         let codec_params = track.codec_params.clone();
 
-        let sample_rate = codec_params.sample_rate
-            .context("Unknown sample rate")?;
-        let channels = codec_params.channels
+        let sample_rate = codec_params.sample_rate.context("Unknown sample rate")?;
+        let channels = codec_params
+            .channels
             .context("Unknown channel count")?
             .count();
 
@@ -162,7 +168,10 @@ impl AudioProcessor {
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(symphonia::core::errors::Error::IoError(e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break
+                }
                 Err(e) => return Err(e.into()),
             };
 
@@ -178,6 +187,37 @@ impl AudioProcessor {
             samples: all_samples,
             channels,
             sample_rate,
+        })
+    }
+
+    fn probe_audio_info(data: &[u8], format_hint: Option<&str>) -> Result<AudioInfo> {
+        let cursor = std::io::Cursor::new(data.to_vec());
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+        let mut hint = Hint::new();
+        if let Some(ext) = format_hint {
+            hint.with_extension(ext);
+        }
+
+        let probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .context("Failed to probe audio format")?;
+
+        let track = probed
+            .format
+            .default_track()
+            .context("No audio tracks found")?;
+        let codec_params = &track.codec_params;
+
+        Ok(AudioInfo {
+            codec_is_vorbis: codec_params.codec == CODEC_TYPE_VORBIS,
+            sample_rate: codec_params.sample_rate,
+            channels: codec_params.channels.map(|channels| channels.count()),
         })
     }
 
@@ -261,22 +301,35 @@ impl AudioProcessor {
     /// Resample audio to target sample rate
     /// Uses settings matching oggenc2's SRC_SINC_FASTEST (libsamplerate)
     pub fn resample(&self, audio: DecodedAudio) -> Result<DecodedAudio> {
-        if audio.sample_rate == self.target_sample_rate {
-            return Ok(audio);
+        self.resample_to_rate(&audio, self.target_sample_rate)
+    }
+
+    fn resample_to_rate(
+        &self,
+        audio: &DecodedAudio,
+        target_sample_rate: u32,
+    ) -> Result<DecodedAudio> {
+        if audio.sample_rate == target_sample_rate {
+            return Ok(audio.clone());
         }
 
         let channels = audio.channels;
-        let ratio = self.target_sample_rate as f64 / audio.sample_rate as f64;
+        if channels == 0 {
+            bail!("Cannot resample audio with zero channels");
+        }
+        let ratio = target_sample_rate as f64 / audio.sample_rate as f64;
 
         // Deinterleave samples into per-channel vectors
         let samples_per_channel = audio.samples.len() / channels;
-        let mut channel_data: Vec<Vec<f32>> = vec![Vec::with_capacity(samples_per_channel); channels];
+        let mut channel_data: Vec<Vec<f32>> =
+            vec![Vec::with_capacity(samples_per_channel); channels];
 
         for (i, sample) in audio.samples.iter().enumerate() {
             channel_data[i % channels].push(*sample);
         }
 
-        let resampled = Self::resample_channels(channel_data, samples_per_channel, channels, ratio)?;
+        let resampled =
+            Self::resample_channels(channel_data, samples_per_channel, channels, ratio)?;
 
         // Interleave samples back together
         let output_len = resampled[0].len();
@@ -290,7 +343,7 @@ impl AudioProcessor {
         Ok(DecodedAudio {
             samples: output,
             channels,
-            sample_rate: self.target_sample_rate,
+            sample_rate: target_sample_rate,
         })
     }
 
@@ -314,15 +367,12 @@ impl AudioProcessor {
             window: WindowFunction::BlackmanHarris2,
         };
 
-        let mut resampler = SincFixedIn::<f32>::new(
-            ratio,
-            2.0,
-            params,
-            samples_per_channel,
-            channels,
-        ).context("Failed to create resampler")?;
+        let mut resampler =
+            SincFixedIn::<f32>::new(ratio, 2.0, params, samples_per_channel, channels)
+                .context("Failed to create resampler")?;
 
-        resampler.process(&channel_data, None)
+        resampler
+            .process(&channel_data, None)
             .context("Failed to resample audio")
     }
 
@@ -330,7 +380,8 @@ impl AudioProcessor {
     pub fn encode_ogg(&self, audio: &DecodedAudio) -> Result<Vec<u8>> {
         // Deinterleave into per-channel data for the encoder
         let samples_per_channel = audio.samples.len() / audio.channels;
-        let mut channel_samples: Vec<Vec<f32>> = vec![Vec::with_capacity(samples_per_channel); audio.channels];
+        let mut channel_samples: Vec<Vec<f32>> =
+            vec![Vec::with_capacity(samples_per_channel); audio.channels];
 
         for (i, &sample) in audio.samples.iter().enumerate() {
             channel_samples[i % audio.channels].push(sample.clamp(-1.0, 1.0));
@@ -340,8 +391,12 @@ impl AudioProcessor {
     }
 
     /// Encode per-channel data directly to OGG without interleaving first.
-    /// Used by the optimized pipeline to skip the interleave→deinterleave roundtrip.
-    fn encode_ogg_channels(channel_data: &[Vec<f32>], sample_rate: u32, quality: f32) -> Result<Vec<u8>> {
+    /// Used by the optimized pipeline to skip the interleave -> deinterleave roundtrip.
+    fn encode_ogg_channels(
+        channel_data: &[Vec<f32>],
+        sample_rate: u32,
+        quality: f32,
+    ) -> Result<Vec<u8>> {
         let channels = channel_data.len();
         let mut output = Vec::new();
 
@@ -357,19 +412,22 @@ impl AudioProcessor {
             target_quality: quality,
         });
 
-        let mut encoder = encoder.build()
+        let mut encoder = encoder
+            .build()
             .map_err(|e| anyhow::anyhow!("Failed to build Vorbis encoder: {:?}", e))?;
 
-        // Clamp samples and build slices
-        let clamped: Vec<Vec<f32>> = channel_data.iter()
+        let clamped: Vec<Vec<f32>> = channel_data
+            .iter()
             .map(|ch| ch.iter().map(|s| s.clamp(-1.0, 1.0)).collect())
             .collect();
         let channel_slices: Vec<&[f32]> = clamped.iter().map(|v| v.as_slice()).collect();
 
-        encoder.encode_audio_block(&channel_slices)
+        encoder
+            .encode_audio_block(&channel_slices)
             .map_err(|e| anyhow::anyhow!("Failed to encode audio: {:?}", e))?;
 
-        encoder.finish()
+        encoder
+            .finish()
             .map_err(|e| anyhow::anyhow!("Failed to finish encoding: {:?}", e))?;
 
         Ok(output)
@@ -386,12 +444,12 @@ impl AudioProcessor {
 
         let mut buffer = Vec::new();
         let cursor = std::io::Cursor::new(&mut buffer);
-        let mut writer = WavWriter::new(cursor, spec)
-            .context("Failed to create WAV writer")?;
+        let mut writer = WavWriter::new(cursor, spec).context("Failed to create WAV writer")?;
 
         for &sample in &audio.samples {
             let sample_i16 = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
-            writer.write_sample(sample_i16)
+            writer
+                .write_sample(sample_i16)
                 .context("Failed to write sample")?;
         }
 
@@ -400,37 +458,112 @@ impl AudioProcessor {
         Ok(buffer)
     }
 
-    /// Process OggEnc2 operation: decode OGG, resample, re-encode to OGG
+    /// Process OggEnc2 operation: decode OGG, resample, re-encode to OGG.
     ///
-    /// Optimized pipeline that keeps samples in per-channel format throughout,
-    /// avoiding the interleave→deinterleave roundtrip between resample and encode.
-    /// Matches oggenc2.exe behavior: decode → resample (SRC_SINC_FASTEST) → encode.
+    /// If the source is already Ogg Vorbis at the manifest target sample rate,
+    /// copy it through unchanged. Vorbis files do not expose the original
+    /// encoder quality setting reliably, so quality cannot be safely compared.
     pub fn process_ogg_resample(&self, input_data: &[u8]) -> Result<Vec<u8>> {
-        let decoded = self.decode_bytes(input_data, Some("ogg"))
+        if self.can_copy_ogg_resample_input(input_data)? {
+            return Ok(input_data.to_vec());
+        }
+
+        if Self::use_ffmpeg_audio_backend() {
+            return self.process_ogg_resample_ffmpeg(input_data);
+        }
+
+        let decoded = self
+            .decode_bytes(input_data, Some("ogg"))
             .context("Failed to decode OGG")?;
 
         let channels = decoded.channels;
         let samples_per_channel = decoded.samples.len() / channels;
 
-        // Skip resample if already at target rate
         if decoded.sample_rate == self.target_sample_rate {
             return self.encode_ogg(&decoded);
         }
 
-        // Deinterleave once (decode produces interleaved samples)
-        let mut channel_data: Vec<Vec<f32>> = vec![Vec::with_capacity(samples_per_channel); channels];
+        // Deinterleave once (decode produces interleaved samples).
+        let mut channel_data: Vec<Vec<f32>> =
+            vec![Vec::with_capacity(samples_per_channel); channels];
         for (i, &sample) in decoded.samples.iter().enumerate() {
             channel_data[i % channels].push(sample);
         }
 
-        // Resample - returns per-channel data directly (no interleaving)
         let ratio = self.target_sample_rate as f64 / decoded.sample_rate as f64;
         let resampled = Self::resample_channels(channel_data, samples_per_channel, channels, ratio)
             .context("Failed to resample")?;
 
-        // Encode directly from per-channel data (no deinterleaving needed)
         Self::encode_ogg_channels(&resampled, self.target_sample_rate, self.ogg_quality)
             .context("Failed to encode OGG")
+    }
+
+    fn can_copy_ogg_resample_input(&self, input_data: &[u8]) -> Result<bool> {
+        let info = Self::probe_audio_info(input_data, Some("ogg"))?;
+
+        Ok(info.codec_is_vorbis
+            && info.sample_rate == Some(self.target_sample_rate)
+            && info.channels.is_some_and(|channels| channels > 0))
+    }
+
+    fn use_ffmpeg_audio_backend() -> bool {
+        std::env::var("TTW_AUDIO_BACKEND")
+            .is_ok_and(|backend| backend.eq_ignore_ascii_case("ffmpeg"))
+    }
+
+    fn process_ogg_resample_ffmpeg(&self, input_data: &[u8]) -> Result<Vec<u8>> {
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "ogg",
+                "-i",
+                "pipe:0",
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-ar",
+                &self.target_sample_rate.to_string(),
+                "-c:a",
+                "libvorbis",
+                "-q:a",
+                &self.ffmpeg_vorbis_quality().to_string(),
+                "-f",
+                "ogg",
+                "pipe:1",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to start ffmpeg for OggEnc2")?;
+
+        {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .context("Failed to open ffmpeg stdin")?;
+            stdin
+                .write_all(input_data)
+                .context("Failed to write input audio to ffmpeg")?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .context("Failed to wait for ffmpeg")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("ffmpeg OggEnc2 failed: {}", stderr.trim());
+        }
+
+        Ok(output.stdout)
+    }
+
+    fn ffmpeg_vorbis_quality(&self) -> String {
+        let quality = (self.ogg_quality * 10.0).clamp(-1.0, 10.0);
+        format!("{quality:.2}")
     }
 
     /// Process AudioEnc operation: convert to specified format
@@ -440,16 +573,23 @@ impl AudioProcessor {
         input_format: Option<&str>,
         output_format: AudioFormat,
     ) -> Result<Vec<u8>> {
-        let decoded = self.decode_bytes(input_data, input_format)
+        let decoded = self
+            .decode_bytes(input_data, input_format)
             .context("Failed to decode audio")?;
 
-        let resampled = self.resample(decoded)
-            .context("Failed to resample")?;
-
         match output_format {
-            AudioFormat::Ogg => self.encode_ogg(&resampled),
-            AudioFormat::Wav => self.encode_wav(&resampled),
-            AudioFormat::Mp3 => self.encode_mp3(&resampled),
+            AudioFormat::Ogg => {
+                let resampled = self.resample(decoded).context("Failed to resample")?;
+                self.encode_ogg(&resampled)
+            }
+            AudioFormat::Wav => {
+                let resampled = self.resample(decoded).context("Failed to resample")?;
+                self.encode_wav(&resampled)
+            }
+            AudioFormat::Mp3 => {
+                let resampled = self.resample(decoded).context("Failed to resample")?;
+                self.encode_mp3(&resampled)
+            }
         }
     }
 
@@ -457,23 +597,30 @@ impl AudioProcessor {
     fn encode_mp3(&self, audio: &DecodedAudio) -> Result<Vec<u8>> {
         use std::mem::MaybeUninit;
 
-        let mut builder = Builder::new()
-            .ok_or_else(|| anyhow::anyhow!("Failed to create LAME encoder"))?;
+        let mut builder =
+            Builder::new().ok_or_else(|| anyhow::anyhow!("Failed to create LAME encoder"))?;
 
-        builder.set_num_channels(audio.channels as u8)
+        builder
+            .set_num_channels(audio.channels as u8)
             .map_err(|e| anyhow::anyhow!("Failed to set channels: {:?}", e))?;
-        builder.set_sample_rate(audio.sample_rate)
+        builder
+            .set_sample_rate(audio.sample_rate)
             .map_err(|e| anyhow::anyhow!("Failed to set sample rate: {:?}", e))?;
-        builder.set_quality(mp3lame_encoder::Quality::Best)
+        builder
+            .set_quality(mp3lame_encoder::Quality::Best)
             .map_err(|e| anyhow::anyhow!("Failed to set quality: {:?}", e))?;
-        builder.set_brate(mp3lame_encoder::Bitrate::Kbps192)
+        builder
+            .set_brate(mp3lame_encoder::Bitrate::Kbps192)
             .map_err(|e| anyhow::anyhow!("Failed to set bitrate: {:?}", e))?;
 
-        let mut encoder = builder.build()
+        let mut encoder = builder
+            .build()
             .map_err(|e| anyhow::anyhow!("Failed to build LAME encoder: {:?}", e))?;
 
         // Convert f32 samples to i16
-        let samples_i16: Vec<i16> = audio.samples.iter()
+        let samples_i16: Vec<i16> = audio
+            .samples
+            .iter()
             .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
             .collect();
 
@@ -482,8 +629,13 @@ impl AudioProcessor {
         if audio.channels == 1 {
             // Mono - use interleaved with 1 channel
             let input = InterleavedPcm(&samples_i16);
-            let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(samples_i16.len())];
-            let encoded = encoder.encode(input, &mut output)
+            let mut output: Vec<MaybeUninit<u8>> =
+                vec![
+                    MaybeUninit::uninit();
+                    mp3lame_encoder::max_required_buffer_size(samples_i16.len())
+                ];
+            let encoded = encoder
+                .encode(input, &mut output)
                 .map_err(|e| anyhow::anyhow!("Failed to encode MP3: {:?}", e))?;
             // SAFETY: encode() initializes the first `encoded` bytes
             mp3_data.extend(output[..encoded].iter().map(|b| unsafe { b.assume_init() }));
@@ -498,9 +650,14 @@ impl AudioProcessor {
                 right.push(chunk.get(1).copied().unwrap_or(chunk[0]));
             }
 
-            let input = DualPcm { left: &left, right: &right };
-            let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(frame_count)];
-            let encoded = encoder.encode(input, &mut output)
+            let input = DualPcm {
+                left: &left,
+                right: &right,
+            };
+            let mut output: Vec<MaybeUninit<u8>> =
+                vec![MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(frame_count)];
+            let encoded = encoder
+                .encode(input, &mut output)
                 .map_err(|e| anyhow::anyhow!("Failed to encode stereo MP3: {:?}", e))?;
             // SAFETY: encode() initializes the first `encoded` bytes
             mp3_data.extend(output[..encoded].iter().map(|b| unsafe { b.assume_init() }));
@@ -509,8 +666,10 @@ impl AudioProcessor {
         }
 
         // Flush encoder
-        let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(1024)];
-        let flushed = encoder.flush::<FlushNoGap>(&mut output)
+        let mut output: Vec<MaybeUninit<u8>> =
+            vec![MaybeUninit::uninit(); mp3lame_encoder::max_required_buffer_size(1024)];
+        let flushed = encoder
+            .flush::<FlushNoGap>(&mut output)
             .map_err(|e| anyhow::anyhow!("Failed to flush MP3 encoder: {:?}", e))?;
         // SAFETY: flush() initializes the first `flushed` bytes
         mp3_data.extend(output[..flushed].iter().map(|b| unsafe { b.assume_init() }));
@@ -523,6 +682,12 @@ impl Default for AudioProcessor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+struct AudioInfo {
+    codec_is_vorbis: bool,
+    sample_rate: Option<u32>,
+    channels: Option<usize>,
 }
 
 /// Decoded audio data

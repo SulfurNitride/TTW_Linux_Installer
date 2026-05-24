@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use sysinfo::System;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Lightweight background RAM monitor that tracks process memory usage.
 /// Samples RSS and available system RAM at configurable intervals.
@@ -64,13 +64,14 @@ impl MemoryMonitor {
                     thread::sleep(interval);
                 }
             })
-            .expect("Failed to spawn memory monitor thread");
+            .map_err(|e| warn!("Failed to spawn memory monitor thread: {}", e))
+            .ok();
 
         Self {
             running,
             peak_rss_bytes,
             initial_rss_bytes: initial_rss,
-            handle: Some(handle),
+            handle,
             start: Instant::now(),
         }
     }
@@ -140,7 +141,7 @@ fn get_rss_bytes() -> u64 {
     // Cross-platform fallback: use sysinfo
     #[cfg(not(target_os = "linux"))]
     {
-        use sysinfo::{Pid, System, ProcessRefreshKind, RefreshKind, UpdateKind};
+        use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};
         let pid = Pid::from_u32(std::process::id());
         let mut sys = System::new_with_specifics(
             RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_memory()),
@@ -169,5 +170,8 @@ pub fn print_ram_status(label: &str) {
     sys.refresh_memory();
     let available_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
     let total_gb = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
-    println!("  [RAM] {}: Process {:.0} MB | System {:.1}/{:.1} GB available", label, rss, available_gb, total_gb);
+    println!(
+        "  [RAM] {}: Process {:.0} MB | System {:.1}/{:.1} GB available",
+        label, rss, available_gb, total_gb
+    );
 }

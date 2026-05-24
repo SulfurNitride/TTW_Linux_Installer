@@ -1,21 +1,21 @@
 [package]
 name = "ttw_installer"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 description = "Tale of Two Wastelands Linux Installer"
 authors = ["Sulfur Nitride"]
+license = "GPL-3.0-only"
 
 [dependencies]
 # BSA handling
 ba2 = "3.0.1"
+dream_archive = { path = "/home/luke/Documents/dream_archive", optional = true }
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
 
-# Compression (zlib-rs is pure Rust and fastest for BSA decompression)
-lz4_flex = "0.12"
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+# Compression
+lz4_flex = "0.13"
 
 # Audio decoding (pure Rust)
 symphonia = { version = "0.5", features = ["ogg", "wav", "pcm", "vorbis", "mp3"] }
@@ -32,6 +32,9 @@ vorbis_rs = "0.5"
 # MP3 encoding (LAME C bindings)
 mp3lame-encoder = "0.2"
 
+# Optional in-process FFmpeg audio backend for benchmarking.
+ffmpeg-next = { version = "8.1", optional = true }
+
 # Serialization (for MPI parsing)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -44,12 +47,10 @@ rayon = "1.10"
 crossbeam-channel = "0.5"
 
 # System info (for memory detection)
-sysinfo = "0.35"
+sysinfo = "0.39"
 
 # File utilities
 walkdir = "2.5"
-tempfile = "3.10"
-memmap2 = "0.9"  # Memory-mapped files (uses virtual memory, not RAM)
 
 # VCDIFF/xdelta3 patching (pure Rust, no subprocess needed)
 oxidelta = { version = "0.1", default-features = false, features = ["zlib-secondary"] }
@@ -60,17 +61,10 @@ md-5 = "0.10"
 hex = "0.4"
 
 # Path handling
-dirs = "5.0"
+dirs = "6.0"
 
 # Progress bars
-indicatif = "0.17"
-
-# HTTP for downloading xdelta3
-ureq = "2.9"
-
-# Archive handling
-tar = "0.4"
-zip = "0.6"
+indicatif = "0.18"
 
 # Logging
 tracing = "0.1.44"
@@ -79,10 +73,10 @@ tracing-appender = "0.2.4"
 chrono = "0.4"
 
 # SQLite for BSA caching (reduces RAM usage)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 # GUI
-eframe = "0.33.3"
+eframe = { version = "0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 egui = "0.33.3"
 rfd = "0.17"  # File dialogs
 
@@ -90,11 +84,15 @@ rfd = "0.17"  # File dialogs
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[features]
+default = []
+dream-reader = ["dep:dream_archive"]
+ffmpeg-audio = ["dep:ffmpeg-next"]
+
 [[bin]]
 name = "mpi_installer"
-path = "src/mpi_installer/cli.rs"
+path = "src/app/cli.rs"
 
 [[bin]]
 name = "mpi_installer_gui"
-path = "src/mpi_installer/gui.rs"
-
+path = "src/app/gui.rs"

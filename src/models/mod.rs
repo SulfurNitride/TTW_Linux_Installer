@@ -1,7 +1,7 @@
 mod asset;
-mod manifest;
 mod config;
+mod manifest;
 
 pub use asset::*;
-pub use manifest::*;
 pub use config::*;
+pub use manifest::*;

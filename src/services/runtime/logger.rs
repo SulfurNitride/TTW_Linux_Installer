@@ -1,9 +1,9 @@
-use anyhow::{Result, Context};
-use std::path::PathBuf;
-use std::fs;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tracing_appender::non_blocking::WorkerGuard;
+use anyhow::{Context, Result};
 use chrono::Local;
+use std::fs;
+use std::path::PathBuf;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Logger configuration and initialization
 pub struct Logger {
@@ -17,15 +17,7 @@ impl Logger {
     /// Initialize logging for an installation
     /// Creates a timestamped log file in the logs directory
     pub fn init(package_name: &str) -> Result<Self> {
-        let log_dir = Self::get_log_directory()?;
-        fs::create_dir_all(&log_dir)
-            .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
-
-        // Create timestamped filename: 2026-01-20_13-45-22_PackageName.log
-        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
-        let safe_name = Self::sanitize_filename(package_name);
-        let log_filename = format!("{}_{}.log", timestamp, safe_name);
-        let log_path = log_dir.join(&log_filename);
+        let log_path = Self::log_path_for(package_name)?;
 
         // Create file appender
         let file = fs::File::create(&log_path)
@@ -61,7 +53,8 @@ impl Logger {
             .with(env_filter)
             .with(file_layer)
             .with(console_layer)
-            .init();
+            .try_init()
+            .context("Failed to initialize tracing subscriber")?;
 
         tracing::info!("=== MPI Installer Log ===");
         tracing::info!("Package: {}", package_name);
@@ -83,7 +76,8 @@ impl Logger {
         tracing_subscriber::registry()
             .with(env_filter)
             .with(fmt::layer().with_target(false))
-            .init();
+            .try_init()
+            .context("Failed to initialize tracing subscriber")?;
 
         Ok(())
     }
@@ -100,9 +94,23 @@ impl Logger {
         Ok(PathBuf::from("./logs"))
     }
 
+    /// Build a timestamped log path using the same directory and filename rules
+    /// as the tracing logger.
+    pub fn log_path_for(package_name: &str) -> Result<PathBuf> {
+        let log_dir = Self::get_log_directory()?;
+        fs::create_dir_all(&log_dir)
+            .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
+
+        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let safe_name = Self::sanitize_filename(package_name);
+        let log_filename = format!("{}_{}.log", timestamp, safe_name);
+        Ok(log_dir.join(log_filename))
+    }
+
     /// Sanitize a string for use in filenames
     fn sanitize_filename(name: &str) -> String {
-        name.chars()
+        let sanitized = name
+            .chars()
             .map(|c| match c {
                 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => c,
                 ' ' | '.' => '_',
@@ -110,7 +118,13 @@ impl Logger {
             })
             .collect::<String>()
             .trim_matches('_')
-            .to_string()
+            .to_string();
+
+        if sanitized.is_empty() {
+            "package".to_string()
+        } else {
+            sanitized
+        }
     }
 
     /// Get the path to the current log file
@@ -119,10 +133,20 @@ impl Logger {
     }
 
     /// Log installation completion summary
-    pub fn log_summary(&self, success: usize, failed: usize, bsa_created: usize, bsa_failed: usize) {
+    pub fn log_summary(
+        &self,
+        success: usize,
+        failed: usize,
+        bsa_created: usize,
+        bsa_failed: usize,
+    ) {
         tracing::info!("=== Installation Summary ===");
         tracing::info!("Assets processed: {} success, {} failed", success, failed);
-        tracing::info!("BSA archives: {} created, {} failed", bsa_created, bsa_failed);
+        tracing::info!(
+            "BSA archives: {} created, {} failed",
+            bsa_created,
+            bsa_failed
+        );
         tracing::info!("Completed at: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
         tracing::info!("Log saved to: {}", self.log_path.display());
     }
@@ -138,7 +162,8 @@ impl Logger {
         let mut logs: Vec<_> = fs::read_dir(&log_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.path().extension()
+                e.path()
+                    .extension()
                     .map(|ext| ext == "log")
                     .unwrap_or(false)
             })
@@ -151,9 +176,24 @@ impl Logger {
             b_time.cmp(&a_time)
         });
 
-        Ok(logs.into_iter()
-            .take(limit)
-            .map(|e| e.path())
-            .collect())
+        Ok(logs.into_iter().take(limit).map(|e| e.path()).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Logger;
+
+    #[test]
+    fn sanitize_filename_preserves_safe_characters() {
+        assert_eq!(
+            Logger::sanitize_filename("Tale of Two-Wastelands_3.4"),
+            "Tale_of_Two-Wastelands_3_4"
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_falls_back_for_empty_names() {
+        assert_eq!(Logger::sanitize_filename("../"), "package");
     }
 }

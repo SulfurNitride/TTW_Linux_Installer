@@ -1,7 +1,7 @@
-use anyhow::{Result, Context};
-use std::path::Path;
+use crate::models::{Asset, Location, TtwManifest, Variable};
+use anyhow::{Context, Result};
 use std::fs;
-use crate::models::{Asset, TtwManifest, Location, Variable};
+use std::path::Path;
 
 /// Loads and parses TTW installation manifest
 pub struct ManifestLoader;
@@ -15,35 +15,35 @@ impl ManifestLoader {
 
         println!("Loading manifest from: {}", manifest_path.display());
 
-        let json = fs::read_to_string(manifest_path)
-            .context("Failed to read manifest file")?;
+        let json = fs::read_to_string(manifest_path).context("Failed to read manifest file")?;
 
-        let manifest: TtwManifest = serde_json::from_str(&json)
-            .context("Failed to parse manifest JSON")?;
+        let manifest: TtwManifest =
+            serde_json::from_str(&json).context("Failed to parse manifest JSON")?;
 
         // Print summary
         if let Some(pkg) = &manifest.package {
-            println!("  Package: {} v{}",
+            println!(
+                "  Package: {} v{}",
                 pkg.title.as_deref().unwrap_or("Unknown"),
-                pkg.version.as_deref().unwrap_or("?"));
+                pkg.version.as_deref().unwrap_or("?")
+            );
         }
 
-        let var_count = manifest.variables
+        let var_count = manifest
+            .variables
             .as_ref()
             .and_then(|v| v.first())
             .map(|v| v.len())
             .unwrap_or(0);
 
-        let loc_count = manifest.locations
+        let loc_count = manifest
+            .locations
             .as_ref()
             .and_then(|l| l.first())
             .map(|l| l.len())
             .unwrap_or(0);
 
-        let asset_count = manifest.assets
-            .as_ref()
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let asset_count = manifest.assets.as_ref().map(|a| a.len()).unwrap_or(0);
 
         println!("  Variables: {} defined", var_count);
         println!("  Locations: {} defined", loc_count);
@@ -88,7 +88,10 @@ impl ManifestLoader {
         }
 
         if fail_count > 3 {
-            eprintln!("Warning: {} more assets failed to parse (messages suppressed)", fail_count - 3);
+            eprintln!(
+                "Warning: {} more assets failed to parse (messages suppressed)",
+                fail_count - 3
+            );
         }
 
         println!("Successfully parsed {} assets", assets.len());
@@ -183,7 +186,10 @@ impl ManifestLoader {
                     });
 
                     if uses_variables {
-                        println!("  Profile 0 has hardcoded Windows paths, using Profile {} instead", idx);
+                        println!(
+                            "  Profile 0 has hardcoded Windows paths, using Profile {} instead",
+                            idx
+                        );
                         return idx;
                     }
                 }
@@ -231,7 +237,11 @@ impl ManifestLoader {
                 .collect();
 
             if !bsa_targets.is_empty() {
-                println!("  Found {} BSA targets in profile {}", bsa_targets.len(), profile_idx);
+                println!(
+                    "  Found {} BSA targets in profile {}",
+                    bsa_targets.len(),
+                    profile_idx
+                );
                 return Ok(bsa_targets);
             }
         }
@@ -248,7 +258,11 @@ impl ManifestLoader {
                 .collect();
 
             if !bsa_targets.is_empty() {
-                println!("  Found {} BSA targets (Type 0) in profile {}", bsa_targets.len(), profile_idx);
+                println!(
+                    "  Found {} BSA targets (Type 0) in profile {}",
+                    bsa_targets.len(),
+                    profile_idx
+                );
                 return Ok(bsa_targets);
             }
         }
@@ -259,90 +273,5 @@ impl ManifestLoader {
     /// Get pre-installation checks from manifest
     pub fn get_checks(manifest: &TtwManifest) -> Vec<crate::models::Check> {
         manifest.checks.clone().unwrap_or_default()
-    }
-
-    /// Get post-installation commands from manifest
-    pub fn get_post_commands(manifest: &TtwManifest) -> Vec<crate::models::PostCommand> {
-        manifest.post_commands.clone().unwrap_or_default()
-    }
-
-    /// Execute post-installation commands (translated from Windows to Linux)
-    /// These are typically rename/delete operations for BSA files
-    pub fn execute_post_commands(
-        post_commands: &[crate::models::PostCommand],
-        destination: &str,
-    ) -> Result<(usize, usize)> {
-        let mut success = 0;
-        let mut failed = 0;
-
-        for cmd in post_commands {
-            let value = match &cmd.value {
-                Some(v) => v,
-                None => continue,
-            };
-
-            // Parse Windows command and translate to Linux operation
-            // Format: cmd.exe /C del "path" or cmd.exe /C ren "old" "new"
-            let result = Self::execute_single_command(value, destination);
-
-            match result {
-                Ok(_) => success += 1,
-                Err(e) => {
-                    eprintln!("  PostCommand failed: {} - {}", value, e);
-                    failed += 1;
-                }
-            }
-        }
-
-        Ok((success, failed))
-    }
-
-    /// Execute a single Windows command translated to Linux
-    fn execute_single_command(cmd: &str, destination: &str) -> Result<()> {
-        use std::fs;
-        use std::path::PathBuf;
-
-        // Remove cmd.exe /C prefix
-        let cmd = cmd.trim();
-        let cmd = cmd.strip_prefix("cmd.exe /C ").unwrap_or(cmd);
-        let cmd = cmd.strip_prefix("cmd /C ").unwrap_or(cmd);
-
-        // Replace %DESTINATION% with actual path
-        let cmd = cmd.replace("%DESTINATION%", destination);
-        // Convert backslashes to forward slashes
-        let cmd = cmd.replace('\\', "/");
-
-        if cmd.starts_with("del ") || cmd.starts_with("DEL ") {
-            // Delete command: del "path"
-            let path = cmd[4..].trim().trim_matches('"');
-            let path = PathBuf::from(path);
-
-            if path.exists() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("Failed to delete: {}", path.display()))?;
-                println!("  Deleted: {}", path.display());
-            }
-        } else if cmd.starts_with("ren ") || cmd.starts_with("REN ") {
-            // Rename command: ren "old" "new"
-            let parts: Vec<&str> = cmd[4..].trim().split('"').filter(|s| !s.trim().is_empty()).collect();
-
-            if parts.len() >= 2 {
-                let old_path = PathBuf::from(parts[0].trim());
-                // New name is just the filename, not full path
-                let new_name = parts[1].trim();
-                let new_path = old_path.parent().unwrap_or(std::path::Path::new(".")).join(new_name);
-
-                if old_path.exists() {
-                    fs::rename(&old_path, &new_path)
-                        .with_context(|| format!("Failed to rename: {} -> {}", old_path.display(), new_path.display()))?;
-                    println!("  Renamed: {} -> {}", old_path.file_name().unwrap_or_default().to_string_lossy(), new_name);
-                } else {
-                    // Not an error if source doesn't exist (might not have been created)
-                    println!("  Skip rename (not found): {}", old_path.display());
-                }
-            }
-        }
-
-        Ok(())
     }
 }

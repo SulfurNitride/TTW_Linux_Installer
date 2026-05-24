@@ -1,15 +1,11 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use ttw_installer::{
-    models::InstallConfig,
-    services::{
-        AssetProcessor, FileVerifier, LocationResolver, Logger, ManifestLoader, MpiExtractor,
-        MpiStore, XdeltaManager,
-    },
+    app::{find_manifest, run_install as run_shared_install, InstallEvent, InstallRequest},
+    services::{DetectedGame, GameDetection, Logger, ManifestLoader, MpiExtractor},
 };
 
 #[derive(Parser)]
@@ -86,6 +82,9 @@ enum Commands {
         oblivion: Option<PathBuf>,
     },
 
+    /// Auto-detect supported game installations
+    Detect,
+
     /// List recent installation logs
     Logs {
         /// Number of recent logs to show
@@ -148,6 +147,7 @@ fn main() -> Result<()> {
         Commands::Verify { fo3, fnv, oblivion } => {
             run_verify(fo3.as_deref(), fnv.as_deref(), oblivion.as_deref())
         }
+        Commands::Detect => run_detect(),
         Commands::Logs { count } => run_logs(count),
     }
 }
@@ -160,92 +160,20 @@ fn run_install(
     dest: &Path,
     dry_run: bool,
 ) -> Result<()> {
-    let install_start = Instant::now();
     println!("=== MPI Linux Installer ===\n");
 
-    // Validate provided paths
-    if let Some(fo3_path) = fo3 {
-        if !fo3_path.exists() {
-            bail!("Fallout 3 directory not found: {}", fo3_path.display());
-        }
-    }
-    if let Some(fnv_path) = fnv {
-        if !fnv_path.exists() {
-            bail!(
-                "Fallout New Vegas directory not found: {}",
-                fnv_path.display()
-            );
-        }
-    }
-    if let Some(oblivion_path) = oblivion {
-        if !oblivion_path.exists() {
-            bail!("Oblivion directory not found: {}", oblivion_path.display());
-        }
-    }
-
-    // Handle MPI loading - prefer in-memory if enough RAM, fall back to disk extraction
-    let (mpi_dir, cleanup_needed, mpi_store) = if MpiExtractor::is_mpi_file(mpi_path) {
-        // Check if we have enough RAM for in-memory mode (~4 GB for MPI + ~4 GB for processing)
-        let mut sys = sysinfo::System::new();
-        sys.refresh_memory();
-        let available_gb = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
-        let use_inmemory = available_gb >= 10.0; // Need ~8 GB headroom
-
-        if use_inmemory {
-            // Load MPI entirely into memory (instant lookups, no disk extraction needed)
-            let store = MpiStore::load(mpi_path)?;
-
-            // Write only the manifest to disk (ManifestLoader needs a file path)
-            let extract_dir = dest.join(".mpi_package");
-            std::fs::create_dir_all(&extract_dir)?;
-            let manifest_dir = extract_dir.join("_package");
-            std::fs::create_dir_all(&manifest_dir)?;
-
-            if let Some(manifest_data) = store.get_manifest() {
-                std::fs::write(manifest_dir.join("index.json"), manifest_data)?;
-            } else {
-                bail!("No manifest found in MPI package");
-            }
-
-            (extract_dir.clone(), true, Some(store))
-        } else {
-            // Low RAM: extract to disk (traditional mode)
-            println!("System has {:.1} GB available RAM, using disk extraction (need 10+ GB for in-memory mode)", available_gb);
-            let extract_dir = dest.join(".mpi_package");
-            let extracted = MpiExtractor::extract_to(mpi_path, &extract_dir)?;
-            (extracted, true, None)
-        }
-    } else if mpi_path.is_dir() {
-        (mpi_path.to_path_buf(), false, None)
-    } else {
-        bail!("Invalid MPI path: {}", mpi_path.display());
-    };
-
-    // Find manifest
-    let manifest_path = find_manifest(&mpi_dir)?;
-    println!("\nLoading manifest: {}", manifest_path.display());
-
-    // Load manifest
-    let manifest = ManifestLoader::load_from_file(&manifest_path)?;
-
-    // Get package name for logging
-    let package_name = manifest
-        .package
-        .as_ref()
-        .and_then(|p| p.title.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
-    let package_version = manifest
-        .package
-        .as_ref()
-        .and_then(|p| p.version.clone())
-        .unwrap_or_else(|| "?".to_string());
-
-    // Initialize logging with package name
-    let logger = Logger::init(&package_name)?;
-
-    info!("Package: {} v{}", package_name, package_version);
+    let log_label = mpi_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Installation");
+    let logger = Logger::init(log_label)?;
+    info!("Install requested");
     info!("MPI path: {}", mpi_path.display());
     info!("Destination: {}", dest.display());
+    if dry_run {
+        warn!("DRY RUN MODE - No files will be written");
+    }
     if let Some(p) = fo3 {
         info!("Fallout 3: {}", p.display());
     }
@@ -255,176 +183,42 @@ fn run_install(
     if let Some(p) = oblivion {
         info!("Oblivion: {}", p.display());
     }
-    if dry_run {
-        warn!("DRY RUN MODE - No files will be written");
-    }
 
-    // Parse assets
-    let assets = ManifestLoader::parse_assets(&manifest)?;
-    info!("Parsed {} assets", assets.len());
-
-    // Select best profile (avoids profiles with hardcoded Windows paths)
-    let profile_index = ManifestLoader::select_best_profile(&manifest);
-    info!("Using profile {}", profile_index);
-
-    // Get locations for selected profile
-    let locations = ManifestLoader::get_locations(&manifest, profile_index)?;
-    info!("Loaded {} locations", locations.len());
-
-    // Get BSA targets from the best profile (may be Profile 1 with proper flags)
-    let bsa_targets = ManifestLoader::get_bsa_target_locations(&manifest)?;
-    info!("Found {} BSA targets", bsa_targets.len());
-
-    // Get variables from selected profile, fall back to profile 0
-    let variables = ManifestLoader::get_variables(&manifest, profile_index)
-        .or_else(|_| ManifestLoader::get_variables(&manifest, 0))
-        .unwrap_or_default();
-
-    // Create config with provided paths (empty string if not provided)
-    let destination_path = dest.to_string_lossy().to_string();
-    let config = InstallConfig {
-        fallout3_root: fo3
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        falloutnv_root: fnv
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        oblivion_root: oblivion
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        destination_path: destination_path.clone(),
-        mpi_package_path: mpi_dir.to_string_lossy().to_string(),
-    };
-
-    // Create location resolver with manifest variables
-    let resolver = LocationResolver::new(locations.clone(), config).with_variables(&variables);
-    resolver.print_locations();
-
-    // Run pre-installation checks (hash verification, file existence, etc.)
-    let checks = ManifestLoader::get_checks(&manifest);
-    if !checks.is_empty() {
-        info!("Running {} pre-installation checks...", checks.len());
-        let verifier = FileVerifier::new(&resolver);
-        let verification_result = verifier.run_checks(&checks)?;
-
-        if !verification_result.is_success() {
-            error!("Pre-installation verification failed!");
-            error!("{} checks failed:", verification_result.failed);
-            for err in &verification_result.errors {
-                error!("  - {}", err);
+    let report = run_shared_install(
+        InstallRequest {
+            mpi_path: mpi_path.to_path_buf(),
+            fallout3_path: fo3.map(Path::to_path_buf),
+            falloutnv_path: fnv.map(Path::to_path_buf),
+            oblivion_path: oblivion.map(Path::to_path_buf),
+            destination_path: dest.to_path_buf(),
+            dry_run,
+        },
+        |event| match event {
+            InstallEvent::Log(message) => info!("{}", message),
+            InstallEvent::Progress {
+                current,
+                total,
+                message,
+            } => {
+                if current == 0 || current == total || current % 1000 == 0 {
+                    info!(
+                        "Progress: {:.0}% - {}",
+                        current as f32 / total as f32 * 100.0,
+                        message
+                    );
+                }
             }
-            bail!(
-                "Installation aborted: {} verification checks failed. \
-                Please ensure you have valid, unmodified game files.",
-                verification_result.failed
-            );
-        }
-        info!("All {} checks passed", verification_result.passed);
-    }
+        },
+    )?;
 
-    // Ensure xdelta3 is available
-    info!("Checking xdelta3...");
-    let xdelta = XdeltaManager::ensure_available(dest.to_path_buf())?;
-    info!("xdelta3: {}", xdelta.path().display());
-
-    // Create asset processor
-    let mut processor = AssetProcessor::new(
-        resolver,
-        xdelta,
-        mpi_dir.to_path_buf(),
-        dest.to_path_buf(),
-        &locations,
-        &bsa_targets,
-    )?
-    .with_dry_run(dry_run);
-
-    // Attach in-memory MPI store if available
-    if let Some(store) = mpi_store {
-        processor = processor.with_mpi_store(store);
-    }
-
-    // Create destination directory
-    if !dry_run {
-        std::fs::create_dir_all(dest)?;
-    }
-
-    // Process assets using streaming mode (parallel BSA processing, minimal RAM)
-    info!("=== Processing Assets (Streaming Mode) ===");
-    let stats = processor.process_assets_streaming(&assets)?;
-
-    info!(
-        "Processing complete: {} success, {} failed",
-        stats.success, stats.failed
+    logger.log_summary(
+        report.assets_success,
+        report.assets_failed,
+        report.bsa_success,
+        report.bsa_failed,
     );
-    stats.print_summary();
-    if !stats.errors.is_empty() {
-        println!("\n=== Errors ({}) ===", stats.errors.len());
-        for err in &stats.errors {
-            println!("  {}", err);
-            error!("Asset error: {}", err);
-        }
-    }
 
-    // Write BSA archives
-    let (bsa_success, bsa_fail) = processor.finalize_bsas()?;
-    info!("BSA archives: {} created, {} failed", bsa_success, bsa_fail);
-
-    // Execute post-installation commands (renames, etc.)
-    let mut post_success = 0usize;
-    let mut post_fail = 0usize;
-    let post_commands = ManifestLoader::get_post_commands(&manifest);
-    if !post_commands.is_empty() {
-        println!("\n=== Executing Post-Installation Commands ===");
-        (post_success, post_fail) =
-            ManifestLoader::execute_post_commands(&post_commands, &destination_path)?;
-        info!(
-            "Post-commands: {} success, {} failed",
-            post_success, post_fail
-        );
-    }
-
-    // Log summary
-    logger.log_summary(stats.success, stats.failed, bsa_success, bsa_fail);
-
-    let missing_patch_errors = stats
-        .errors
-        .iter()
-        .filter(|e| e.contains("Patch file not found"))
-        .count();
-
-    let mut failure_reasons: Vec<String> = Vec::new();
-    if stats.failed > 0 {
-        failure_reasons.push(format!("{} asset operations failed", stats.failed));
-    }
-    if bsa_fail > 0 {
-        failure_reasons.push(format!("{} BSA archives failed to write", bsa_fail));
-    }
-    if post_fail > 0 {
-        failure_reasons.push(format!("{} post-install commands failed", post_fail));
-    }
-
-    let failure_message = if failure_reasons.is_empty() {
-        None
-    } else if missing_patch_errors > 0 {
-        Some(format!(
-            "{}. Detected {} missing patch files (.xd3). This usually means the extracted MPI package is incomplete or mismatched for this manifest.",
-            failure_reasons.join("; "),
-            missing_patch_errors
-        ))
-    } else {
-        Some(failure_reasons.join("; "))
-    };
-
-    // Cleanup
-    if cleanup_needed {
-        MpiExtractor::cleanup_temp(&mpi_dir)?;
-    }
-
-    if let Some(message) = failure_message {
-        bail!("Installation failed: {}", message);
-    }
-
-    let elapsed = install_start.elapsed();
+    let elapsed = report.elapsed;
     let minutes = elapsed.as_secs() / 60;
     let seconds = elapsed.as_secs() % 60;
 
@@ -512,8 +306,17 @@ fn run_verify(fo3: Option<&Path>, fnv: Option<&Path>, oblivion: Option<&Path>) -
     println!("=== Game Installation Verifier ===\n");
 
     let mut all_valid = true;
+    let detection = if fo3.is_none() || fnv.is_none() || oblivion.is_none() {
+        Some(GameDetection::detect())
+    } else {
+        None
+    };
 
-    if let Some(fo3_path) = fo3 {
+    if let Some(fo3_path) = fo3.or_else(|| {
+        detection
+            .as_ref()
+            .and_then(|detected| detected_path(detected.fallout3.as_ref()))
+    }) {
         println!("Checking Fallout 3: {}", fo3_path.display());
         if verify_fo3_install(fo3_path) {
             println!("  [OK] Valid Fallout 3 installation");
@@ -523,7 +326,11 @@ fn run_verify(fo3: Option<&Path>, fnv: Option<&Path>, oblivion: Option<&Path>) -
         }
     }
 
-    if let Some(fnv_path) = fnv {
+    if let Some(fnv_path) = fnv.or_else(|| {
+        detection
+            .as_ref()
+            .and_then(|detected| detected_path(detected.falloutnv.as_ref()))
+    }) {
         println!("Checking Fallout New Vegas: {}", fnv_path.display());
         if verify_fnv_install(fnv_path) {
             println!("  [OK] Valid Fallout New Vegas installation");
@@ -533,7 +340,11 @@ fn run_verify(fo3: Option<&Path>, fnv: Option<&Path>, oblivion: Option<&Path>) -
         }
     }
 
-    if let Some(oblivion_path) = oblivion {
+    if let Some(oblivion_path) = oblivion.or_else(|| {
+        detection
+            .as_ref()
+            .and_then(|detected| detected_path(detected.oblivion.as_ref()))
+    }) {
         println!("Checking Oblivion: {}", oblivion_path.display());
         if verify_oblivion_install(oblivion_path) {
             println!("  [OK] Valid Oblivion installation");
@@ -551,40 +362,36 @@ fn run_verify(fo3: Option<&Path>, fnv: Option<&Path>, oblivion: Option<&Path>) -
     }
 }
 
-fn find_manifest(mpi_dir: &Path) -> Result<PathBuf> {
-    // Look for common manifest locations
-    let candidates = [
-        "_package/index.json", // TTW MPI format
-        "manifest.json",
-        "Manifest.json",
-        "TTW.manifest.json",
-        "ttw.manifest.json",
-        "index.json",
-    ];
+fn detected_path(game: Option<&DetectedGame>) -> Option<&Path> {
+    game.map(|game| game.path.as_path())
+}
 
-    for name in candidates {
-        let path = mpi_dir.join(name);
-        if path.exists() {
-            return Ok(path);
-        }
+fn run_detect() -> Result<()> {
+    println!("=== Game Auto-Detection ===\n");
+    let detected = GameDetection::detect();
+
+    print_detected_game("Fallout 3", detected.fallout3.as_ref());
+    print_detected_game("Fallout New Vegas", detected.falloutnv.as_ref());
+    print_detected_game("Oblivion", detected.oblivion.as_ref());
+
+    if detected.detected_count() == 0 {
+        println!("\nNo supported games detected.");
+        println!("Manual install paths can still be provided with --fo3, --fnv, and --oblivion.");
     }
 
-    // Search recursively
-    for entry in walkdir::WalkDir::new(mpi_dir).max_depth(3) {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        if (name.contains("manifest") || name == "index.json")
-            && entry
-                .path()
-                .extension()
-                .map(|e| e == "json")
-                .unwrap_or(false)
-        {
-            return Ok(entry.path().to_path_buf());
-        }
-    }
+    Ok(())
+}
 
-    bail!("Manifest not found in: {}", mpi_dir.display())
+fn print_detected_game(label: &str, game: Option<&DetectedGame>) {
+    match game {
+        Some(game) => println!(
+            "  [OK] {}: {} ({})",
+            label,
+            game.path.display(),
+            game.source
+        ),
+        None => println!("  [--] {}: not found", label),
+    }
 }
 
 fn verify_fo3_install(path: &Path) -> bool {

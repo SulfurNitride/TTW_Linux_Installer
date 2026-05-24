@@ -1,6 +1,7 @@
-use anyhow::{Result, Context, bail};
-use std::path::{Path, PathBuf};
+use anyhow::{bail, Context, Result};
+use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
@@ -12,13 +13,16 @@ pub struct XdeltaManager {
     /// Path to the xdelta3 binary (for file-based patching fallback)
     xdelta_path: Option<PathBuf>,
     /// Directory for temp files (uses output dir, not system temp)
-    staging_dir: PathBuf,
+    _staging_dir: PathBuf,
 }
 
 impl XdeltaManager {
     /// Create manager with staging directory. Finds xdelta3 binary as optional fallback.
     pub fn new(xdelta_path: PathBuf, staging_dir: PathBuf) -> Self {
-        Self { xdelta_path: Some(xdelta_path), staging_dir }
+        Self {
+            xdelta_path: Some(xdelta_path),
+            _staging_dir: staging_dir,
+        }
     }
 
     /// Test if a binary actually works
@@ -28,6 +32,13 @@ impl XdeltaManager {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    fn find_binary_in_path(binary_name: &str) -> Option<PathBuf> {
+        let path_var = env::var_os("PATH")?;
+        env::split_paths(&path_var)
+            .map(|dir| dir.join(binary_name))
+            .find(|path| path.exists() && Self::test_binary(path))
     }
 
     /// Get default xdelta3 path (in tools directory)
@@ -87,32 +98,15 @@ impl XdeltaManager {
                 }
             }
 
-            if let Ok(output) = Command::new("which").arg("xdelta3").output() {
-                if output.status.success() {
-                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !path.is_empty() {
-                        let p = PathBuf::from(&path);
-                        if Self::test_binary(&p) {
-                            return Some(p);
-                        }
-                    }
-                }
+            if let Some(path) = Self::find_binary_in_path(binary_name) {
+                return Some(path);
             }
         }
 
         #[cfg(windows)]
         {
-            if let Ok(output) = Command::new("where").arg("xdelta3.exe").output() {
-                if output.status.success() {
-                    let path = String::from_utf8_lossy(&output.stdout)
-                        .lines().next().unwrap_or("").trim().to_string();
-                    if !path.is_empty() {
-                        let p = PathBuf::from(&path);
-                        if Self::test_binary(&p) {
-                            return Some(p);
-                        }
-                    }
-                }
+            if let Some(path) = Self::find_binary_in_path(binary_name) {
+                return Some(path);
             }
         }
 
@@ -150,14 +144,17 @@ impl XdeltaManager {
     pub fn ensure_available(staging_dir: PathBuf) -> Result<Self> {
         let binary = Self::find_xdelta3();
         if let Some(ref path) = binary {
-            info!("xdelta3 binary found: {} (fallback for file ops)", path.display());
+            info!(
+                "xdelta3 binary found: {} (fallback for file ops)",
+                path.display()
+            );
         } else {
             info!("xdelta3 binary not found; using oxidelta (pure Rust) for all patching");
         }
 
         Ok(Self {
             xdelta_path: binary,
-            staging_dir,
+            _staging_dir: staging_dir,
         })
     }
 
@@ -196,11 +193,7 @@ impl XdeltaManager {
 
     /// Apply a delta patch from bytes (pure Rust, no subprocess, no temp files).
     /// Uses oxidelta for VCDIFF decoding directly in memory.
-    pub fn apply_patch_from_bytes(
-        &self,
-        source_data: &[u8],
-        patch_data: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub fn apply_patch_from_bytes(&self, source_data: &[u8], patch_data: &[u8]) -> Result<Vec<u8>> {
         oxidelta::compress::decoder::decode_all(source_data, patch_data)
             .context("VCDIFF patch failed (oxidelta)")
     }

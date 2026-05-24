@@ -1,11 +1,11 @@
-use anyhow::{Result, Context};
-use rusqlite::{Connection, params};
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::collections::HashMap;
-use tracing::{info, warn};
+use anyhow::{Context, Result};
 use ba2::tes4::{Archive, ArchiveKey, DirectoryKey, File as BsaFile};
 use ba2::{ByteSlice, Reader};
+use rusqlite::{params, Connection};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+use tracing::{info, warn};
 
 /// SQLite-based cache for BSA file extraction
 /// Stores extracted files on disk instead of RAM, dramatically reducing memory usage
@@ -24,12 +24,16 @@ impl BsaCache {
         // If a stale file exists from a crashed run, try to remove it
         if db_path.exists() {
             if let Err(e) = std::fs::remove_file(&db_path) {
-                warn!("Failed to remove stale cache file {}: {}", db_path.display(), e);
+                warn!(
+                    "Failed to remove stale cache file {}: {}",
+                    db_path.display(),
+                    e
+                );
             }
         }
 
-        let conn = Connection::open(&db_path)
-            .with_context(|| format!(
+        let conn = Connection::open(&db_path).with_context(|| {
+            format!(
                 "Failed to create SQLite cache at {}\n\
                 Possible causes:\n\
                 - Disk is full (check with 'df -h {}')\n\
@@ -37,7 +41,8 @@ impl BsaCache {
                 - Filesystem is read-only",
                 db_path.display(),
                 base_dir.display()
-            ))?;
+            )
+        })?;
 
         // Configure for performance with minimal memory footprint
         conn.execute_batch(
@@ -46,8 +51,9 @@ impl BsaCache {
              PRAGMA cache_size = 1000;
              PRAGMA temp_store = FILE;
              PRAGMA locking_mode = EXCLUSIVE;
-             PRAGMA mmap_size = 0;"
-        ).context("Failed to configure SQLite pragmas")?;
+             PRAGMA mmap_size = 0;",
+        )
+        .context("Failed to configure SQLite pragmas")?;
 
         // Create cache table
         conn.execute(
@@ -58,7 +64,8 @@ impl BsaCache {
                 PRIMARY KEY (bsa_path, file_path)
             )",
             [],
-        ).context("Failed to create bsa_cache table")?;
+        )
+        .context("Failed to create bsa_cache table")?;
 
         info!("Created SQLite BSA cache at {}", db_path.display());
 
@@ -69,18 +76,26 @@ impl BsaCache {
         })
     }
 
+    fn conn(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("BSA cache connection lock poisoned"))
+    }
+
     /// Insert a file into the cache
     /// Returns the size of the data stored
     pub fn insert(&self, bsa_path: &Path, file_path: &str, data: &[u8]) -> Result<usize> {
         let bsa_str = bsa_path.to_string_lossy();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
 
         conn.execute(
             "INSERT OR REPLACE INTO bsa_cache (bsa_path, file_path, data) VALUES (?1, ?2, ?3)",
             params![bsa_str.as_ref(), file_path, data],
-        ).with_context(|| format!("Failed to cache {}:{}", bsa_str, file_path))?;
+        )
+        .with_context(|| format!("Failed to cache {}:{}", bsa_str, file_path))?;
 
-        self.total_bytes.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+        self.total_bytes
+            .fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
         Ok(data.len())
     }
 
@@ -91,10 +106,9 @@ impl BsaCache {
         F: FnMut(&mut dyn FnMut(String, Vec<u8>) -> Result<()>) -> Result<()>,
     {
         let bsa_str = bsa_path.to_string_lossy().to_string();
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn()?;
 
-        let tx = conn.transaction()
-            .context("Failed to start transaction")?;
+        let tx = conn.transaction().context("Failed to start transaction")?;
 
         let mut count = 0;
         let mut bytes = 0;
@@ -117,18 +131,19 @@ impl BsaCache {
 
         tx.commit().context("Failed to commit transaction")?;
 
-        self.total_bytes.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+        self.total_bytes
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
         Ok((count, bytes))
     }
 
     /// Get a file from the cache
     pub fn get(&self, bsa_path: &Path, file_path: &str) -> Result<Option<Vec<u8>>> {
         let bsa_str = bsa_path.to_string_lossy();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
 
-        let mut stmt = conn.prepare_cached(
-            "SELECT data FROM bsa_cache WHERE bsa_path = ?1 AND file_path = ?2"
-        ).context("Failed to prepare select statement")?;
+        let mut stmt = conn
+            .prepare_cached("SELECT data FROM bsa_cache WHERE bsa_path = ?1 AND file_path = ?2")
+            .context("Failed to prepare select statement")?;
 
         let result = stmt.query_row(params![bsa_str.as_ref(), file_path], |row| {
             row.get::<_, Vec<u8>>(0)
@@ -143,10 +158,11 @@ impl BsaCache {
 
     /// Clear all cached data
     pub fn clear(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute("DELETE FROM bsa_cache", [])
             .context("Failed to clear cache")?;
-        self.total_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.total_bytes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -157,12 +173,10 @@ impl BsaCache {
 
     /// Get number of files in cache
     pub fn file_count(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM bsa_cache",
-            [],
-            |row| row.get(0),
-        ).context("Failed to count cached files")?;
+        let conn = self.conn()?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM bsa_cache", [], |row| row.get(0))
+            .context("Failed to count cached files")?;
         Ok(count as usize)
     }
 
@@ -178,7 +192,11 @@ impl Drop for BsaCache {
     fn drop(&mut self) {
         // Clean up the temp database file
         if let Err(e) = std::fs::remove_file(&self.db_path) {
-            warn!("Failed to remove temp cache file {}: {}", self.db_path.display(), e);
+            warn!(
+                "Failed to remove temp cache file {}: {}",
+                self.db_path.display(),
+                e
+            );
         } else {
             info!("Cleaned up SQLite cache: {}", self.db_path.display());
         }
@@ -192,12 +210,14 @@ pub fn get_bsa_file_sizes(bsa_path: &Path, file_paths: &[&str]) -> Result<HashMa
         .with_context(|| format!("Failed to open BSA for size query: {}", bsa_path.display()))?;
 
     // Build set of needed paths (normalized to lowercase with backslashes)
-    let needed: std::collections::HashSet<String> = file_paths.iter()
+    let needed: std::collections::HashSet<String> = file_paths
+        .iter()
         .map(|p| p.replace('/', "\\").to_lowercase())
         .collect();
 
     // Build lookup for original casing
-    let path_lookup: HashMap<String, &str> = file_paths.iter()
+    let path_lookup: HashMap<String, &str> = file_paths
+        .iter()
         .map(|p| (p.replace('/', "\\").to_lowercase(), *p))
         .collect();
 
@@ -226,7 +246,8 @@ pub fn get_bsa_file_sizes(bsa_path: &Path, file_paths: &[&str]) -> Result<HashMa
                     file.as_bytes().len()
                 };
 
-                let original_path = path_lookup.get(&full_path)
+                let original_path = path_lookup
+                    .get(&full_path)
                     .map(|s| s.to_string())
                     .unwrap_or(full_path);
 
