@@ -14,7 +14,7 @@ use super::stats::{AtomicOpTimings, OpType, ProcessingStats};
 use crate::models::{Asset, Location};
 use crate::services::{
     print_ram_status, BsaCache, BsaHandler, BsaWriterManager, LocationResolver, MemoryMonitor,
-    MpiStore, XdeltaManager,
+    MpiPathIndex, MpiStore, XdeltaManager,
 };
 
 /// Processes assets from TTW manifest (thread-safe)
@@ -27,6 +27,8 @@ pub struct AssetProcessor {
     pub(super) xdelta: Arc<XdeltaManager>,
     /// In-memory MPI package (if loaded). Used for instant file lookups.
     pub(super) mpi_store: Option<Arc<MpiStore>>,
+    /// Extracted MPI files keyed by normalized, case-insensitive path.
+    pub(super) mpi_index: Option<Arc<MpiPathIndex>>,
     pub(super) mpi_dir: PathBuf,
     pub(super) dest_dir: PathBuf,
     pub(super) dry_run: bool,
@@ -194,6 +196,7 @@ impl AssetProcessor {
             bsa_cache: Arc::new(bsa_cache),
             xdelta: Arc::new(xdelta),
             mpi_store: None,
+            mpi_index: None,
             mpi_dir,
             dest_dir,
             dry_run: false,
@@ -208,6 +211,12 @@ impl AssetProcessor {
     /// Attach an in-memory MPI store for instant file lookups.
     pub fn with_mpi_store(mut self, store: MpiStore) -> Self {
         self.mpi_store = Some(Arc::new(store));
+        self
+    }
+
+    /// Attach an index for case-insensitive extracted MPI file lookups.
+    pub fn with_mpi_index(mut self, index: MpiPathIndex) -> Self {
+        self.mpi_index = Some(Arc::new(index));
         self
     }
 
