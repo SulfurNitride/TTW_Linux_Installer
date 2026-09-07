@@ -48,7 +48,17 @@ impl AssetProcessor {
             }
         }
 
-        // Fallback: read from disk with case-insensitive lookup
+        // Disk-backed installs use a one-time lowercase index. MPI archive
+        // names are lowercased during extraction, while the manifest retains
+        // its original Windows casing.
+        if let Some(ref index) = self.mpi_index {
+            if let Some(actual_path) = index.get(normalized) {
+                return fs::read(actual_path)
+                    .with_context(|| format!("Failed to read: {}", actual_path.display()));
+            }
+        }
+
+        // Fallback for callers that do not provide an index.
         let source_path = safe_join(&self.mpi_dir, normalized)?;
         let actual_path = find_file_case_insensitive(&source_path).ok_or_else(|| {
             anyhow::anyhow!(

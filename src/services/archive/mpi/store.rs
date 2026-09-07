@@ -11,6 +11,7 @@ use tracing::warn;
 
 use super::archive_progress_style;
 use super::extractor::MpiExtractor;
+use super::normalize_mpi_path;
 use super::LZ4_FRAME_MAGIC;
 
 /// In-memory MPI package store.
@@ -88,7 +89,7 @@ impl MpiStore {
                 };
 
                 if let Some(data) = data {
-                    let key = entry.path.to_lowercase();
+                    let key = normalize_mpi_path(&entry.path);
                     match files.lock() {
                         Ok(mut files) => {
                             total_bytes.fetch_add(data.len(), Ordering::Relaxed);
@@ -122,7 +123,7 @@ impl MpiStore {
 
     /// Get a file by path (case-insensitive, handles both / and \ separators).
     pub fn get(&self, path: &str) -> Option<&[u8]> {
-        let normalized = path.replace('\\', "/").to_lowercase();
+        let normalized = normalize_mpi_path(path);
         self.files.get(&normalized).map(|v| v.as_slice())
     }
 

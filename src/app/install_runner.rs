@@ -7,7 +7,7 @@ use crate::app::InstallEvent;
 use crate::models::{Check, InstallConfig};
 use crate::services::{
     compute_md5, compute_sha1, AssetProcessor, FileVerifier, GameDetection, LocationResolver,
-    ManifestLoader, MpiExtractor, MpiStore, XdeltaManager,
+    ManifestLoader, MpiExtractor, MpiPathIndex, MpiStore, XdeltaManager,
 };
 
 #[derive(Debug, Clone)]
@@ -46,7 +46,7 @@ where
 
     emit(InstallEvent::log("Loading MPI package..."));
     emit(InstallEvent::progress(0, 10_000, "Preparing MPI package"));
-    let (mpi_dir, cleanup_needed, mpi_store) = load_mpi_package(&request, &emit)?;
+    let (mpi_dir, cleanup_needed, mpi_store, mpi_index) = load_mpi_package(&request, &emit)?;
     emit(InstallEvent::progress(500, 10_000, "MPI package ready"));
 
     let manifest_path = find_manifest(&mpi_dir)?;
@@ -156,6 +156,9 @@ where
 
     if let Some(store) = mpi_store {
         processor = processor.with_mpi_store(store);
+    }
+    if let Some(index) = mpi_index {
+        processor = processor.with_mpi_index(index);
     }
 
     if !request.dry_run {
@@ -518,7 +521,7 @@ where
 fn load_mpi_package<F>(
     request: &InstallRequest,
     emit: &F,
-) -> Result<(PathBuf, bool, Option<MpiStore>)>
+) -> Result<(PathBuf, bool, Option<MpiStore>, Option<MpiPathIndex>)>
 where
     F: Fn(InstallEvent) + Sync,
 {
@@ -541,17 +544,19 @@ where
                 bail!("No manifest found in MPI package");
             }
 
-            Ok((extract_dir, true, Some(store)))
+            Ok((extract_dir, true, Some(store), None))
         } else {
             emit(InstallEvent::log(format!(
                 "System has {:.1} GB available RAM, using disk extraction (need 10+ GB for in-memory mode)",
                 available_gb
             )));
             let extracted = MpiExtractor::extract_to(&request.mpi_path, &extract_dir)?;
-            Ok((extracted, true, None))
+            let index = MpiPathIndex::build(&extracted)?;
+            Ok((extracted, true, None, Some(index)))
         }
     } else if request.mpi_path.is_dir() {
-        Ok((request.mpi_path.clone(), false, None))
+        let index = MpiPathIndex::build(&request.mpi_path)?;
+        Ok((request.mpi_path.clone(), false, None, Some(index)))
     } else {
         bail!("Invalid MPI path: {}", request.mpi_path.display());
     }
