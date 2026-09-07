@@ -87,6 +87,11 @@ libc = "0.2"
 default = []
 ffmpeg-audio = ["dep:ffmpeg-next"]
 
+# Only builds with the optional in-process FFmpeg backend enabled.
+[[example]]
+name = "bench_ffmpeg_lib_audio"
+required-features = ["ffmpeg-audio"]
+
 [[bin]]
 name = "mpi_installer"
 path = "src/app/cli.rs"

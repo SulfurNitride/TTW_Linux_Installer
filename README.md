@@ -53,4 +53,17 @@ cargo build --release
 ./mpi_installer --help
 ```
 
+## Nix Usage
+
+```bash
+# Run GUI
+nix run github:SulfurNitride/TTW_Linux_Installer
+
+# Run CLI
+nix run github:SulfurNitride/TTW_Linux_Installer#cli
+
+# Enter dev shell
+nix develop
+```
+
 Made with AI via Claude Code. In the meantime I'm learning rust when I can. Heres the current [playlist](https://www.youtube.com/watch?v=XRcdnokYx74&list=PLB52iltb95qIMAQNma2nHP7Og9c9mqAXl&pp=gAQB).

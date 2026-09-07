@@ -17,3 +17,7 @@ Thumbs.db
 # Binaries (downloaded separately)
 tools/xdelta3.exe
 tools/xdelta3
+
+# Nix
+/result
+/result-*

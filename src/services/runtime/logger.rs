@@ -82,16 +82,18 @@ impl Logger {
         Ok(())
     }
 
-    /// Get the log directory path (next to executable)
+    /// Get the log directory path (next to executable, or the user's data
+    /// directory when the executable lives somewhere read-only)
     fn get_log_directory() -> Result<PathBuf> {
-        // Store logs next to the executable for easy access
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                return Ok(exe_dir.join("logs"));
-            }
-        }
-        // Fallback to current working directory
-        Ok(PathBuf::from("./logs"))
+        // create_dir_all doubles as the writability check
+        let next_to_exe = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("logs")))
+            .filter(|dir| fs::create_dir_all(dir).is_ok());
+
+        Ok(next_to_exe
+            .or_else(|| dirs::data_local_dir().map(|dir| dir.join("ttw_installer/logs")))
+            .unwrap_or_else(|| PathBuf::from("./logs")))
     }
 
     /// Build a timestamped log path using the same directory and filename rules
