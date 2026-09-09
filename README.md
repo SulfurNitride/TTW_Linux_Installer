@@ -5,7 +5,7 @@ A linux native installer for MPI packages (TTW, BSA Decompressors, so far only t
 
 To run it all you need to do is either double click it and allow executing, or `chmod +x mpi_installer_gui`.
 
-Downloads are on nexus or via the github actions now. https://www.nexusmods.com/site/mods/1657
+Downloads are on nexus or via the github actions now they expire every day so please use nexus. https://www.nexusmods.com/site/mods/1657
 
 If you want to support the things I put out, I do have a [Ko-Fi](https://ko-fi.com/sulfurnitride) I will never charge money for any of my content. [Discord](https://discord.gg/9JWQzSeUWt)
 
